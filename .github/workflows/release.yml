@@ -56,7 +56,7 @@ jobs:
           ./build_release.sh
           SHORT_HASH=$(git rev-parse --short HEAD)
           mv "pkg-manager_v${{ steps.version.outputs.version }}-dev-${SHORT_HASH}.elf" \
-             "pkg-manager_v${{ steps.version.outputs.version }}.elf"
+             "pkg-manager_v${{ steps.version.outputs.version }}-argo.elf"
 
       - name: Create Release
         env:
@@ -97,4 +97,4 @@ jobs:
           gh release create "$TAG" \
             --title "$TAG" \
             --notes-file release-notes.md \
-            "pkg-manager_v${VERSION}.elf"
+            "pkg-manager_v${VERSION}-argo.elf"
