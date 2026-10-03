@@ -1,0 +1,14 @@
+[
+  {
+    "name": "PKG-Manager",
+    "filename": "pkg-manager_v1.4.1.elf",
+    "url": "https://github.com/leansousa/ps5-pkg-mng-/releases/download/v1.4.1/pkg-manager_v1.4.1.elf",
+    "source": "https://github.com/leansousa/ps5-pkg-mng-/releases",
+    "source_direct": "https://github.com/leansousa/ps5-pkg-mng-/releases/download/v1.4.1/pkg-manager_v1.4.1.elf",
+    "description": "Browse and install PKGs from USB, disc, or SMB shares directly on your PS5",
+    "last_update": "2026-10-03",
+    "version": "v1.4.1",
+    "category": "Utilities & Tools",
+    "checksum": "c0dc80bfc5a1c57a1297ba6f981871076181e09608ac4454184f5e209cb6e175"
+  }
+]

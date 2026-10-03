@@ -3,6 +3,10 @@ name: Release On-Demand
 on:
   workflow_dispatch:
 
+concurrency:
+  group: release-on-demand
+  cancel-in-progress: false
+
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
@@ -98,3 +102,59 @@ jobs:
             --title "$TAG" \
             --notes-file release-notes.md \
             "pkg-manager_v${VERSION}-argo.elf"
+
+      - name: Update Payload Manager manifest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          ASSET_NAME="pkg-manager_v${VERSION}-argo.elf"
+          RELEASE_TAG="v${VERSION}"
+          RELEASE_URL="https://github.com/${REPOSITORY}/releases/download/${RELEASE_TAG}/${ASSET_NAME}"
+          ASSET_NAME="$ASSET_NAME" RELEASE_TAG="$RELEASE_TAG" RELEASE_URL="$RELEASE_URL" python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          asset_name = os.environ["ASSET_NAME"]
+          asset_path = Path(asset_name)
+          if not asset_path.is_file():
+              raise SystemExit(f"Release asset not found: {asset_path}")
+
+          with asset_path.open("rb") as asset:
+              checksum = hashlib.file_digest(asset, "sha256").hexdigest()
+
+          manifest_path = Path("payloads.json")
+          payloads = json.loads(manifest_path.read_text()) if manifest_path.exists() else []
+          if not isinstance(payloads, list):
+              raise SystemExit("payloads.json must contain a JSON array")
+
+          payload = {
+              "name": "PKG-Manager",
+              "filename": asset_name,
+              "url": os.environ["RELEASE_URL"],
+              "source": f"https://github.com/{os.environ['REPOSITORY']}/releases",
+              "source_direct": os.environ["RELEASE_URL"],
+              "description": "Browse and install PKGs from USB, disc, or SMB shares directly on your PS5",
+              "last_update": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+              "version": os.environ["RELEASE_TAG"],
+              "category": "Utilities & Tools",
+              "checksum": checksum,
+          }
+
+          payloads = [item for item in payloads if item.get("name") != payload["name"]]
+          payloads.append(payload)
+          manifest_path.write_text(json.dumps(payloads, indent=2, ensure_ascii=False) + "\n")
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add payloads.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Update Payload Manager manifest for v${VERSION}" \
+              -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+            git push origin HEAD:main
+          fi
