@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.4.1.1
+
+- Group backport packages with their matching games and provide a dedicated Backport section
+- Fix backport installation progress totals and completion tracking
+
 ## v1.4.1-argo
 
 - Group backport packages with their matching games and provide a dedicated Backport section
