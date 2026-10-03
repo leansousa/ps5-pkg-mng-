@@ -48,7 +48,8 @@ static void evaluate_install_eligibility(const pkg_detail_t *pkg, int is_install
                 out->disabled_reason = "Application is already installed";
             }
         }
-    } else if (pkg->pkg_type == PKG_TYPE_UPDATE || pkg->pkg_type == PKG_TYPE_DLC) {
+    } else if (pkg->pkg_type == PKG_TYPE_UPDATE || pkg->pkg_type == PKG_TYPE_DLC ||
+               pkg->pkg_type == PKG_TYPE_BACKPORT) {
         if (!out->is_installed) {
             out->can_install = 0;
             out->disabled_reason = partial
@@ -104,7 +105,7 @@ static int compare_pkg_by_title_name(const void *a, const void *b) {
 
 #define MAX_PACKAGES 4096
 #define MAX_DRIVES   16
-#define PKG_MANIFEST_VERSION 3
+#define PKG_MANIFEST_VERSION 4
 
 static pkg_detail_t g_packages[MAX_PACKAGES];
 static size_t g_package_count = 0;
@@ -744,6 +745,28 @@ static int is_package_file(const char *name) {
     return 0;
 }
 
+static int get_backport_title_id(const char *filename, char *out, size_t out_max) {
+    static const char suffix[] = "-backport.pkg";
+    if (!filename || !out || out_max < sizeof("PPSA00000")) return 0;
+
+    size_t filename_len = strlen(filename);
+    if (filename_len != 9 + sizeof(suffix) - 1 ||
+        strncasecmp(filename, "PPSA", 4) != 0 ||
+        strcasecmp(filename + 9, suffix) != 0) {
+        return 0;
+    }
+    for (size_t i = 4; i < 9; i++) {
+        if (filename[i] < '0' || filename[i] > '9') return 0;
+    }
+
+    memcpy(out, filename, 9);
+    out[9] = '\0';
+    for (size_t i = 0; i < 4; i++) {
+        if (out[i] >= 'a' && out[i] <= 'z') out[i] -= ('a' - 'A');
+    }
+    return 1;
+}
+
 static int is_drive_mounted(const char *path) {
     if (!path || path[0] == '\0') return 0;
     struct stat st;
@@ -870,6 +893,15 @@ static int parse_pkg_entry(const char *full_path, const char *filename,
         out_detail->total_pkg_size = file_size;
         out_detail->mtime = mtime;
         out_detail->is_valid = 1;
+    }
+
+    char backport_title_id[PKG_TITLE_ID_LEN] = {0};
+    if (get_backport_title_id(filename, backport_title_id, sizeof(backport_title_id))) {
+        strncpy(out_detail->title_id, backport_title_id, sizeof(out_detail->title_id) - 1);
+        out_detail->title_id[sizeof(out_detail->title_id) - 1] = '\0';
+        out_detail->pkg_type = PKG_TYPE_BACKPORT;
+        strncpy(out_detail->pkg_type_str, "backport", sizeof(out_detail->pkg_type_str) - 1);
+        out_detail->pkg_type_str[sizeof(out_detail->pkg_type_str) - 1] = '\0';
     }
 
     return (!out_detail->is_multipart || out_detail->part_index == 1) ? 0 : 1;

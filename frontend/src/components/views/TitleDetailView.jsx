@@ -376,6 +376,60 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
               </div>
             )}
 
+            {/* Backports Section */}
+            {selectedTitle.backports.length > 0 && (
+              <div className="space-y-3">
+                <h3 className="text-xl font-bold text-white flex items-center space-x-2.5">
+                  <span>Backport</span>
+                  <span className="text-xs px-2.5 py-1 rounded-[2px] bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold">
+                    {selectedTitle.backports.length} Available
+                  </span>
+                </h3>
+
+                <div className="space-y-2.5">
+                  {selectedTitle.backports.map((pkg) => {
+                    const requiredSpace = Number(pkg.total_pkg_size || pkg.file_size) || 0;
+                    const maxAvailable = maxAvailableFor(pkg.title_id || selectedTitle.title_id);
+                    const notEnoughSpace = !!storage && maxAvailable < requiredSpace;
+                    const canInstall = pkg.can_install !== false;
+                    const isInstallDisabled = !canInstall || notEnoughSpace || installerStatus.is_installing;
+
+                    return (
+                      <div
+                        key={pkg.path}
+                        className="rounded-[2px] p-5 bg-[#141520] border border-white/10 flex items-center justify-between gap-5"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-base font-bold text-white truncate" title={pkg.filename}>
+                            {pkg.filename}
+                          </div>
+                          <p className="text-xs sm:text-sm font-mono text-zinc-500 truncate mt-0.5">
+                            {pkg.title_id} • {formatBytes(pkg.file_size)}
+                          </p>
+                          {!canInstall && pkg.install_disabled_reason && (
+                            <p className="text-xs text-amber-400 mt-1">{pkg.install_disabled_reason}</p>
+                          )}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => !isInstallDisabled && handleInstall(pkg)}
+                          disabled={isInstallDisabled}
+                          className={`shrink-0 px-5 py-2.5 rounded-[2px] ps5-focus-item text-sm font-bold transition-all whitespace-nowrap ${
+                            isInstallDisabled
+                              ? 'bg-zinc-800 text-zinc-500 border border-white/5 cursor-not-allowed'
+                              : 'bg-amber-600 hover:bg-amber-500 text-white cursor-pointer'
+                          }`}
+                        >
+                          {notEnoughSpace ? 'No Space' : 'Install Backport'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* DLCs Section */}
             {selectedTitle.dlcs.length > 0 && (
               <div className="space-y-3">

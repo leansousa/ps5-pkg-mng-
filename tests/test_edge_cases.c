@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <pthread.h>
+#include <signal.h>
 
 #include "pkg_parser.h"
 #include "pkg_scanner.h"

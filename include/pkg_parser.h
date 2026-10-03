@@ -15,7 +15,8 @@ typedef enum {
     PKG_TYPE_UNKNOWN = 0,
     PKG_TYPE_BASE,     /* Base application / package */
     PKG_TYPE_UPDATE,   /* Application update / patch */
-    PKG_TYPE_DLC       /* Additional content / DLC */
+    PKG_TYPE_DLC,      /* Additional content / DLC */
+    PKG_TYPE_BACKPORT  /* Special backport package identified by filename */
 } pkg_type_t;
 
 typedef struct {
@@ -37,7 +38,7 @@ typedef struct {
     uint32_t part_index;
     uint32_t total_parts;
     pkg_type_t pkg_type;
-    char pkg_type_str[16];   /* "base", "update", "dlc", "unknown" */
+    char pkg_type_str[16];   /* "base", "update", "dlc", "backport", "unknown" */
     char category[16];       /* e.g. "gd", "gp", "ac", etc. */
     uint64_t mtime;          /* File modification timestamp */
     char blurhash[64];       /* BlurHash placeholder for icon0.png ("" if none) */

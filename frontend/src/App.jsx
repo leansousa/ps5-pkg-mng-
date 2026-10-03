@@ -44,6 +44,7 @@ import SettingsView from './components/views/SettingsView';
 import TitleDetailView from './components/views/TitleDetailView';
 import PackageGridView from './components/views/PackageGridView';
 import DrivesView from './components/views/DrivesView';
+import { getBackportTitleId, getLinkedBackports } from './utils/backports';
 
 import DirectInstallView from './components/views/DirectInstallView';
 import DonateModal from './components/modals/DonateModal';
@@ -319,13 +320,14 @@ export default function App() {
         (p.title_name && p.title_name.toLowerCase().indexOf(q) !== -1) ||
         (p.title_id && p.title_id.toLowerCase().indexOf(q) !== -1) ||
         (p.content_id && p.content_id.toLowerCase().indexOf(q) !== -1) ||
+        (p.filename && p.filename.toLowerCase().indexOf(q) !== -1) ||
         (p.app_version && p.app_version.toLowerCase().indexOf(q) !== -1) ||
         (p.pkg_type && p.pkg_type.toLowerCase().indexOf(q) !== -1)
       );
     });
 
     const groupMap = new Map();
-    for (const pkg of filtered) {
+    for (const pkg of filtered.filter((p) => !getBackportTitleId(p))) {
       const baseKey = (pkg.title_id && pkg.title_id.trim() && pkg.title_id.trim().toUpperCase() !== 'UNKNOWN')
         ? pkg.title_id.trim().toUpperCase()
         : (pkg.title_name && pkg.title_name !== 'Unknown Package' && pkg.title_name !== 'Package' ? pkg.title_name : pkg.filename || pkg.path || 'unknown');
@@ -337,6 +339,18 @@ export default function App() {
         groupMap.set(key, { items: [], srcInfo });
       }
       groupMap.get(key).items.push(pkg);
+    }
+
+    for (const { pkg, base } of getLinkedBackports(packages, filtered, drives)) {
+      const srcInfo = getSourceInfo(base.path, drives);
+      const baseKey = base.title_id.trim().toUpperCase();
+      const key = isAllSources ? `${baseKey}__${srcInfo.id}` : baseKey;
+      if (!groupMap.has(key)) {
+        groupMap.set(key, { items: [], srcInfo });
+      }
+      const items = groupMap.get(key).items;
+      if (!items.includes(base)) items.unshift(base);
+      if (!items.includes(pkg)) items.push(pkg);
     }
 
     const groups = [];
@@ -355,9 +369,13 @@ export default function App() {
       // Find DLC packages
       const dlcs = items.filter((p) => p.pkg_type === 'dlc');
 
+      // Backports are listed only in the associated game's detail view.
+      const backports = items.filter((p) => p.pkg_type === 'backport' || getBackportTitleId(p));
+
       // Find other/unknown packages
       const others = items.filter(
-        (p) => p.pkg_type !== 'base' && p.pkg_type !== 'update' && p.pkg_type !== 'dlc'
+        (p) => p.pkg_type !== 'base' && p.pkg_type !== 'update' &&
+          p.pkg_type !== 'dlc' && p.pkg_type !== 'backport' && !getBackportTitleId(p)
       );
 
       // Representative package
@@ -440,6 +458,7 @@ export default function App() {
         base,
         updates,
         dlcs,
+        backports,
         others,
         items,
         latestUpdateVersion: latestUpdateVer,

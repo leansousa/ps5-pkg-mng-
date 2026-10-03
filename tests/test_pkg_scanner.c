@@ -802,6 +802,41 @@ int main(void) {
       assert(strstr(json_ja, "\"title_name\":\"English Title\"") != NULL);
       free(json_ja);
 
+      /* Backport files may not contain standard PKG metadata. Their filename
+       * carries the PPSA ID used to associate them with the base game. */
+      printf("\n=== Testing Backport Filename Classification ===\n");
+      system("rm -rf /tmp/mock_backport_test /tmp/mock_backport_cache");
+      system("mkdir -p /tmp/mock_backport_test");
+      assert(system("cp /tmp/test_scan_fixtures/wc.pkg /tmp/mock_backport_test/PPSA90012.pkg") == 0);
+      FILE *backport_file = fopen("/tmp/mock_backport_test/PPSA90012-backport.pkg", "wb");
+      assert(backport_file != NULL);
+      assert(fputs("special backport package", backport_file) >= 0);
+      fclose(backport_file);
+      setenv("PKG_CACHE_DIR", "/tmp/mock_backport_cache", 1);
+      setenv("PKG_SCAN_DIR", "/tmp/mock_backport_test", 1);
+      pkg_scanner_init();
+      assert(pkg_scanner_scan() == 2);
+
+      int found_backport = 0;
+      for (size_t i = 0; i < pkg_scanner_get_count(); i++) {
+          pkg_detail_t backport_detail;
+          assert(pkg_scanner_get_at(i, &backport_detail) == 0);
+          if (strcmp(backport_detail.filename, "PPSA90012-backport.pkg") == 0) {
+              found_backport = 1;
+              assert(strcmp(backport_detail.title_id, "PPSA90012") == 0);
+              assert(backport_detail.pkg_type == PKG_TYPE_BACKPORT);
+              assert(strcmp(backport_detail.pkg_type_str, "backport") == 0);
+          }
+      }
+      assert(found_backport);
+      char *backport_json = pkg_scanner_packages_for_drive_to_json("/tmp/mock_backport_test");
+      assert(backport_json != NULL);
+      assert(strstr(backport_json, "\"filename\":\"PPSA90012-backport.pkg\"") != NULL);
+      assert(strstr(backport_json, "\"title_id\":\"PPSA90012\"") != NULL);
+      assert(strstr(backport_json, "\"pkg_type\":\"backport\"") != NULL);
+      free(backport_json);
+      system("rm -rf /tmp/mock_backport_test /tmp/mock_backport_cache");
+
       system("rm -rf /tmp/mock_multilang_test");
       system("rm -rf /tmp/mock_manifest_test /tmp/mock_manifest_cache /tmp/mock_usb_empty*");
       unsetenv("PKG_CACHE_DIR");
