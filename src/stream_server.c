@@ -1052,6 +1052,13 @@ int stream_server_session_start(const char *pkg_path) {
     return stream_server_session_start_ex(pkg_path, NULL);
 }
 
+uint64_t stream_server_session_size(void) {
+    pthread_mutex_lock(&g_ss.mutex);
+    uint64_t total_size = g_ss.running ? g_ss.total_size : 0;
+    pthread_mutex_unlock(&g_ss.mutex);
+    return total_size;
+}
+
 int stream_server_session_start_ex(const char *pkg_path, const char *session_name) {
     if (!pkg_path || pkg_path[0] == '\0') {
         return -1;

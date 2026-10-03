@@ -44,7 +44,7 @@ import SettingsView from './components/views/SettingsView';
 import TitleDetailView from './components/views/TitleDetailView';
 import PackageGridView from './components/views/PackageGridView';
 import DrivesView from './components/views/DrivesView';
-import { getBackportTitleId, getLinkedBackports } from './utils/backports';
+import { getBackportTitleId, getLinkedBackports, isBackportInstalled } from './utils/backports';
 
 import DirectInstallView from './components/views/DirectInstallView';
 import DonateModal from './components/modals/DonateModal';
@@ -370,7 +370,9 @@ export default function App() {
       const dlcs = items.filter((p) => p.pkg_type === 'dlc');
 
       // Backports are listed only in the associated game's detail view.
-      const backports = items.filter((p) => p.pkg_type === 'backport' || getBackportTitleId(p));
+      const backports = items
+        .filter((p) => p.pkg_type === 'backport' || getBackportTitleId(p))
+        .map((pkg) => ({ ...pkg, is_backport_installed: isBackportInstalled(pkg) }));
 
       // Find other/unknown packages
       const others = items.filter(
@@ -459,6 +461,7 @@ export default function App() {
         updates,
         dlcs,
         backports,
+        backportCount: backports.length,
         others,
         items,
         latestUpdateVersion: latestUpdateVer,

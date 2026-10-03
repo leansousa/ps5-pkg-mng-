@@ -53,6 +53,10 @@ typedef struct {
 int pkg_parser_resolve_localized_title(const char *loc_json, const char *default_lang,
                                        const char *accept_lang, char *out, size_t out_max);
 
+/* Extracts a PPSA title ID from the special <PPSA>-backport.pkg filename. */
+int pkg_parser_backport_title_id(const char *filename, char *out_title_id,
+                                 size_t out_max);
+
 /**
  * Parses PS5 param.json buffer to extract titleId, category, version,
  * localized titles map, default language, and best default title.

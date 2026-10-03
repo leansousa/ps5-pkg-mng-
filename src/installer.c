@@ -188,8 +188,6 @@ static void *installer_monitor_worker(void *arg) {
     }
     return NULL;
 }
-
-
 static void cleanup_tmp_dir(const char *dir_path) {
     if (!dir_path || dir_path[0] == '\0') return;
     DIR *d = opendir(dir_path);
@@ -1120,6 +1118,8 @@ static void *stream_installer_worker(void *arg) {
             }
         } else if (strcasecmp(kind_copy, "dlc") == 0) {
             snprintf(disp_name, sizeof(disp_name), "%s (DLC)", title_copy);
+        } else if (strcasecmp(kind_copy, "backport") == 0) {
+            snprintf(disp_name, sizeof(disp_name), "%s (Backport)", title_copy);
         } else {
             snprintf(disp_name, sizeof(disp_name), "%s (base)", title_copy);
         }
@@ -1141,6 +1141,14 @@ static void *stream_installer_worker(void *arg) {
             install_log("[INSTALLER] Failed to open stream for %s (file missing or inaccessible)", worker_pkg_path);
             stream_debug_log_close();
             return NULL;
+        }
+        uint64_t stream_size = stream_server_session_size();
+        if (stream_size > 0) {
+            pthread_mutex_lock(&g_installer_mutex);
+            g_status.total_bytes = stream_size;
+            pthread_mutex_unlock(&g_installer_mutex);
+            install_log("[INSTALLER] Using opened stream size as progress total: %llu bytes",
+                        (unsigned long long)stream_size);
         }
     }
 
@@ -2218,6 +2226,27 @@ static int installer_start_internal(const char *pkg_path, const char *pending_pk
             if (stat(pkg_path_copy, &st) == 0) {
                 detail.file_size = (uint64_t)st.st_size;
             }
+        }
+    }
+
+    const char *pkg_filename = strrchr(pkg_path_copy, '/');
+    pkg_filename = pkg_filename ? pkg_filename + 1 : pkg_path_copy;
+    char backport_title_id[PKG_TITLE_ID_LEN] = {0};
+    if (pkg_parser_backport_title_id(pkg_filename, backport_title_id,
+                                     sizeof(backport_title_id))) {
+        strncpy(detail.title_id, backport_title_id, sizeof(detail.title_id) - 1);
+        detail.title_id[sizeof(detail.title_id) - 1] = '\0';
+        detail.pkg_type = PKG_TYPE_BACKPORT;
+        strncpy(detail.pkg_type_str, "backport", sizeof(detail.pkg_type_str) - 1);
+        detail.pkg_type_str[sizeof(detail.pkg_type_str) - 1] = '\0';
+    }
+
+    if (strncmp(pkg_path_copy, "smb://", 6) != 0 &&
+        (detail.file_size == 0 || detail.total_pkg_size == 0)) {
+        struct stat pkg_st;
+        if (stat(pkg_path_copy, &pkg_st) == 0 && pkg_st.st_size > 0) {
+            if (detail.file_size == 0) detail.file_size = (uint64_t)pkg_st.st_size;
+            if (detail.total_pkg_size == 0) detail.total_pkg_size = (uint64_t)pkg_st.st_size;
         }
     }
 

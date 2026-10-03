@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { pollStatus, installPackage, cancelInstall, detachDirectInstall } from '../api/installer';
 import { formatBytes, formatEta } from '../utils/formatters';
 import { getInstallStorageOptions } from '../utils/installStorage';
+import { markBackportInstalled } from '../utils/backports';
 
 export function useInstaller(props) {
   const showToast = props.showToast;
@@ -156,6 +157,10 @@ export function useInstaller(props) {
         }
 
         if (wasInstallingRef.current && !data.is_installing && (data.completed || data.failed)) {
+          if (data.completed && data.pkg_kind === 'backport') {
+            const completedBackport = selectedTitle?.backports?.find((pkg) => pkg.path === data.pkg_path);
+            if (completedBackport) markBackportInstalled(completedBackport);
+          }
           if (fetchStorage) fetchStorage();
           if (selectedDriveRef && selectedDriveRef.current && fetchPackagesForDrive) {
             fetchPackagesForDrive(selectedDriveRef.current);

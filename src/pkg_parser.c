@@ -736,6 +736,31 @@ void pkg_parser_parse_param_sfo(const uint8_t *sfo, size_t sfo_len, char *out_ti
     }
 }
 
+int pkg_parser_backport_title_id(const char *filename, char *out_title_id,
+                                 size_t out_max) {
+    static const char suffix[] = "-backport.pkg";
+    if (!filename || !out_title_id || out_max < sizeof("PPSA00000")) return 0;
+
+    size_t filename_len = strlen(filename);
+    if (filename_len != 9 + sizeof(suffix) - 1 ||
+        strncasecmp(filename, "PPSA", 4) != 0 ||
+        strcasecmp(filename + 9, suffix) != 0) {
+        return 0;
+    }
+    for (size_t i = 4; i < 9; i++) {
+        if (filename[i] < '0' || filename[i] > '9') return 0;
+    }
+
+    memcpy(out_title_id, filename, 9);
+    out_title_id[9] = '\0';
+    for (size_t i = 0; i < 4; i++) {
+        if (out_title_id[i] >= 'a' && out_title_id[i] <= 'z') {
+            out_title_id[i] -= ('a' - 'A');
+        }
+    }
+    return 1;
+}
+
 int pkg_parser_parse(const char *file_path, pkg_detail_t *out) {
     if (!file_path || !out) {
         return -1;

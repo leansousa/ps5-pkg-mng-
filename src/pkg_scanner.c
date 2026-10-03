@@ -745,28 +745,6 @@ static int is_package_file(const char *name) {
     return 0;
 }
 
-static int get_backport_title_id(const char *filename, char *out, size_t out_max) {
-    static const char suffix[] = "-backport.pkg";
-    if (!filename || !out || out_max < sizeof("PPSA00000")) return 0;
-
-    size_t filename_len = strlen(filename);
-    if (filename_len != 9 + sizeof(suffix) - 1 ||
-        strncasecmp(filename, "PPSA", 4) != 0 ||
-        strcasecmp(filename + 9, suffix) != 0) {
-        return 0;
-    }
-    for (size_t i = 4; i < 9; i++) {
-        if (filename[i] < '0' || filename[i] > '9') return 0;
-    }
-
-    memcpy(out, filename, 9);
-    out[9] = '\0';
-    for (size_t i = 0; i < 4; i++) {
-        if (out[i] >= 'a' && out[i] <= 'z') out[i] -= ('a' - 'A');
-    }
-    return 1;
-}
-
 static int is_drive_mounted(const char *path) {
     if (!path || path[0] == '\0') return 0;
     struct stat st;
@@ -896,7 +874,7 @@ static int parse_pkg_entry(const char *full_path, const char *filename,
     }
 
     char backport_title_id[PKG_TITLE_ID_LEN] = {0};
-    if (get_backport_title_id(filename, backport_title_id, sizeof(backport_title_id))) {
+    if (pkg_parser_backport_title_id(filename, backport_title_id, sizeof(backport_title_id))) {
         strncpy(out_detail->title_id, backport_title_id, sizeof(out_detail->title_id) - 1);
         out_detail->title_id[sizeof(out_detail->title_id) - 1] = '\0';
         out_detail->pkg_type = PKG_TYPE_BACKPORT;

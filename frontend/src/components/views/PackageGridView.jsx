@@ -244,6 +244,11 @@ export default function PackageGridView({ groupedTitles, searchQuery, onSearch, 
                                 {hasNewDlc ? 'NEW: ' : ''}{group.dlcCount} {group.dlcCount === 1 ? 'DLC' : 'DLCs'}
                               </span>
                             )}
+                            {group.backportCount > 0 && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-[2px] border bg-amber-950/70 text-amber-300/80 border-amber-800/40 font-medium">
+                                {group.backportCount} {group.backportCount === 1 ? 'Backport' : 'Backports'}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>

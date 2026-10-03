@@ -3,6 +3,7 @@
 #include <string.h>
 #include <assert.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "installer.h"
 #include "pkg_scanner.h"
 #include "test_fixture.h"
@@ -120,6 +121,27 @@ int main(void) {
     assert(strstr(log_txt, "icon='http://127.0.0.1:18841/stream/install/icon-") != NULL);
     free(log_txt);
     printf("DLC install verified: name contains app title and (DLC), icon URL populated\n");
+
+    /* Backport filename metadata must survive installer parsing, and the
+     * progress total must match the bytes exposed by the stream server. */
+    assert(fixture_write_ps5_pkg("/tmp/test_installer_fixtures/PPSA90012-backport.pkg",
+                                 "PPSA90012", "WaveCast", "gd", "01.003.000", 1) == 0);
+    struct stat backport_stat;
+    assert(stat("/tmp/test_installer_fixtures/PPSA90012-backport.pkg", &backport_stat) == 0);
+    assert(installer_start("/tmp/test_installer_fixtures/PPSA90012-backport.pkg") == 0);
+    installer_get_status(&st);
+    assert(strcmp(st.title_id, "PPSA90012") == 0);
+    assert(strcmp(st.pkg_kind, "backport") == 0);
+    assert(st.total_bytes == (uint64_t)backport_stat.st_size);
+    assert(wait_for_state(0, 1, 15000) == 0);
+    installer_get_status(&st);
+    assert(st.completed == 1);
+    assert(st.failed == 0);
+    assert(st.downloaded_bytes == st.total_bytes);
+    log_txt = install_log_get_text(&log_sz);
+    assert(strstr(log_txt, "name='WaveCast (Backport)'") != NULL);
+    free(log_txt);
+    printf("Backport install completed with title ID and nonzero progress total\n");
 
     installer_shutdown();
 

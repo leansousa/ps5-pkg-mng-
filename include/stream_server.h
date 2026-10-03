@@ -24,6 +24,9 @@ int stream_server_session_start(const char *pkg_path);
  * (any *.pkg name is served). */
 int stream_server_session_start_ex(const char *pkg_path, const char *session_name);
 
+/* Returns the byte size of the active virtual package stream, or 0 if idle. */
+uint64_t stream_server_session_size(void);
+
 /* Updates the pinned session filename of a running session. */
 void stream_server_set_session_name(const char *session_name);
 
