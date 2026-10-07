@@ -128,17 +128,31 @@ test('TitleDetailView renders file name and path for updates (#24)', () => {
   assert.match(html, /\/usb0\/updates\/patch_v105_mod\.pkg/);
   assert.match(html, /patch_v105_orig\.pkg/);
   assert.match(html, /\/usb0\/updates\/patch_v105_orig\.pkg/);
+  assert.match(html, /<p class="truncate"><span class="text-zinc-300">patch_v105_mod\.pkg<\/span><\/p><p class="text-zinc-500 font-normal truncate mt-0.5">\(\/usb0\/updates\/patch_v105_mod\.pkg\)<\/p>/);
 });
 
 test('TitleDetailView renders file name, path, and other base packages (#27)', () => {
-  const base1 = { path: '/usb0/games/game_base_eu.pkg', filename: 'game_base_eu.pkg', app_version: '01.00', file_size: 2000, can_install: true };
+  const base1 = { path: 'smb://192.168.1.100/games/game_base_eu.pkg', filename: 'game_base_eu.pkg', app_version: '01.00', file_size: 2000, can_install: true };
   const base2 = { path: '/usb0/games/game_base_us.pkg', filename: 'game_base_us.pkg', app_version: '01.00', file_size: 2000, can_install: true };
   const html = render(Detail, { ...detailProps, title: { ...detailProps.title, base: base1, bases: [base1, base2], updates: [], dlcs: [] }, installQueue: queue([]) });
   assert.match(html, /game_base_eu\.pkg/);
-  assert.match(html, /\/usb0\/games\/game_base_eu\.pkg/);
+  assert.match(html, /smb:\/\/192\.168\.1\.100\/games\/game_base_eu\.pkg/);
+  assert.match(html, /<p class="truncate"><span class="text-zinc-500 font-sans mr-1">Base:<\/span><span class="text-zinc-300">game_base_eu\.pkg<\/span><\/p><p class="text-zinc-500 font-normal truncate mt-0.5">\(smb:\/\/192\.168\.1\.100\/games\/game_base_eu\.pkg\)<\/p>/);
+  assert.match(html, /<\/div><div class="w-full min-w-0 text-xs font-mono text-zinc-400 mt-2"/);
   assert.match(html, /Other Base Packages/);
   assert.match(html, /game_base_us\.pkg/);
   assert.match(html, /\/usb0\/games\/game_base_us\.pkg/);
+  assert.match(html, /<p class="truncate"><span class="text-zinc-300">game_base_us\.pkg<\/span><\/p><p class="text-zinc-500 font-normal truncate mt-0.5">\(\/usb0\/games\/game_base_us\.pkg\)<\/p>/);
+});
+
+test('TitleDetailView does not duplicate path on new line when filename and path are identical or filename missing', () => {
+  const baseSame = { path: 'game_same.pkg', filename: 'game_same.pkg', app_version: '01.00', file_size: 2000, can_install: true };
+  const updNoFilename = { path: '/usb0/updates/patch_v101.pkg', app_version: '01.01', file_size: 1000, can_install: true };
+  const html = render(Detail, { ...detailProps, title: { ...detailProps.title, base: baseSame, bases: [baseSame], updates: [updNoFilename], dlcs: [] }, installQueue: queue([]) });
+  assert.match(html, /game_same\.pkg/);
+  assert.doesNotMatch(html, /\(game_same\.pkg\)/);
+  assert.match(html, /\/usb0\/updates\/patch_v101\.pkg/);
+  assert.doesNotMatch(html, /\(\/usb0\/updates\/patch_v101\.pkg\)/);
 });
 
 const local = (id, titleId, kind, iconUrl) => ({ id, status: 'ready', file: { name: `${id}.pkg`, size: 100 }, iconUrl,

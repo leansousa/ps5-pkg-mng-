@@ -119,16 +119,19 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                           <span>Leftovers Found</span>
                         </span>
                       ) : null}
-                      {selectedTitle.base && (selectedTitle.base.filename || selectedTitle.base.path) && (
-                        <p className="text-xs font-mono text-zinc-400 truncate mt-2" title={selectedTitle.base.path || selectedTitle.base.filename}>
+                    </div>
+
+                    {selectedTitle.base && (selectedTitle.base.filename || selectedTitle.base.path) && (
+                      <div className="w-full min-w-0 text-xs font-mono text-zinc-400 mt-2" title={selectedTitle.base.path || selectedTitle.base.filename}>
+                        <p className="truncate">
                           <span className="text-zinc-500 font-sans mr-1">Base:</span>
                           <span className="text-zinc-300">{selectedTitle.base.filename || selectedTitle.base.path}</span>
-                          {selectedTitle.base.path && selectedTitle.base.filename && selectedTitle.base.path !== selectedTitle.base.filename ? (
-                            <span className="text-zinc-500 ml-2 font-normal">({selectedTitle.base.path})</span>
-                          ) : null}
                         </p>
-                      )}
-                    </div>
+                        {selectedTitle.base.path && selectedTitle.base.filename && selectedTitle.base.path !== selectedTitle.base.filename ? (
+                          <p className="text-zinc-500 font-normal truncate mt-0.5">({selectedTitle.base.path})</p>
+                        ) : null}
+                      </div>
+                    )}
 
                     {(!selectedTitle.isBaseInstalled && !selectedTitle.base) ? (
                       <p className="text-xs text-amber-300 mt-3 font-medium">
@@ -336,12 +339,14 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                             </div>
 
                             {(pkg.filename || pkg.path) && (
-                              <p className="text-xs font-mono text-zinc-400 truncate mt-0.5" title={pkg.path || pkg.filename}>
-                                <span className="text-zinc-300">{pkg.filename || pkg.path}</span>
+                              <div className="text-xs font-mono text-zinc-400 mt-0.5 min-w-0" title={pkg.path || pkg.filename}>
+                                <p className="truncate">
+                                  <span className="text-zinc-300">{pkg.filename || pkg.path}</span>
+                                </p>
                                 {pkg.path && pkg.filename && pkg.path !== pkg.filename ? (
-                                  <span className="text-zinc-500 ml-2 font-normal">({pkg.path})</span>
+                                  <p className="text-zinc-500 font-normal truncate mt-0.5">({pkg.path})</p>
                                 ) : null}
-                              </p>
+                              </div>
                             )}
 
                             {isBaseMulti && (
@@ -461,12 +466,14 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                             </div>
 
                             {(pkg.filename || pkg.path) && (
-                              <p className="text-xs font-mono text-zinc-400 truncate mt-0.5" title={pkg.path || pkg.filename}>
-                                <span className="text-zinc-300">{pkg.filename || pkg.path}</span>
+                              <div className="text-xs font-mono text-zinc-400 mt-0.5 min-w-0" title={pkg.path || pkg.filename}>
+                                <p className="truncate">
+                                  <span className="text-zinc-300">{pkg.filename || pkg.path}</span>
+                                </p>
                                 {pkg.path && pkg.filename && pkg.path !== pkg.filename ? (
-                                  <span className="text-zinc-500 ml-2 font-normal">({pkg.path})</span>
+                                  <p className="text-zinc-500 font-normal truncate mt-0.5">({pkg.path})</p>
                                 ) : null}
-                              </p>
+                              </div>
                             )}
 
                             {isUpdMultipart && (
