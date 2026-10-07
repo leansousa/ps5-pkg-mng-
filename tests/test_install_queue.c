@@ -232,9 +232,180 @@ int main(void) {
     assert(install_queue_add_json("{\"jobs\":[]}", ids, &count) != 0);
     assert(install_queue_add_json("{\"jobs\":true}", ids, &count) != 0);
     assert(install_queue_add_json("{\"jobs\":[{\"path\":\"/A/ba\\u0000se\"}]}", ids, &count) != 0);
+
+    /* Test TTL auto-clearing and dependency preservation */
+    reset();
+    assert(install_queue_get_finished_ttl() == INSTALL_QUEUE_FINISHED_TTL_DEFAULT);
+    install_queue_set_finished_ttl(1);
+    assert(install_queue_get_finished_ttl() == 1);
+
+    /* Completed job auto-clears after TTL */
+    install_queue_request_t single_job = request("/A/base");
+    assert(install_queue_add(&single_job, 1, ids) == 0);
+    wait_state(ids[0], "installing");
+    finish(1);
+    wait_state(ids[0], "completed");
+    char *st = job_state(ids[0]);
+    assert(!strcmp(st, "completed"));
+    free(st);
+    wait_state(ids[0], "missing");
+
+    /* Submitted job (offline) auto-clears after TTL */
+    reset();
+    install_queue_set_finished_ttl(1);
+    offline = 1;
+    assert(install_queue_add(&single_job, 1, ids) == 0);
+    wait_state(ids[0], "submitted");
+    wait_state(ids[0], "missing");
+    offline = 0;
+
+    /* Canceled job auto-clears after TTL */
+    reset();
+    install_queue_set_finished_ttl(1);
+    assert(install_queue_add(&single_job, 1, ids) == 0);
+    wait_state(ids[0], "installing");
+    assert(install_queue_cancel(ids[0]) == 0);
+    release_cleanup();
+    wait_state(ids[0], "canceled");
+    wait_state(ids[0], "missing");
+
+    /* Failed job auto-clears after TTL */
+    reset();
+    install_queue_set_finished_ttl(1);
+    install_queue_request_t fail_job = request("/A/missing");
+    assert(install_queue_add(&fail_job, 1, ids) == 0);
+    wait_state(ids[0], "failed");
+    wait_state(ids[0], "missing");
+
+    /* Aborted job (redundant browser pkg) auto-clears after TTL */
+    reset();
+    install_queue_set_finished_ttl(1);
+    installed = 1;
+    snprintf(refused_title, sizeof(refused_title), "%s", browser.title_id);
+    snprintf(refusal, sizeof(refusal), "%s", "Application is already installed");
+    snprintf(browser.kind, sizeof(browser.kind), "base");
+    assert(install_queue_add(&browser, 1, ids) == 0);
+    wait_state(ids[0], "aborted");
+    wait_state(ids[0], "missing");
+
+    /* Submitted/completed base needed by pending dependent is NOT cleared even if TTL expires */
+    reset();
+    install_queue_set_finished_ttl(1);
+    install_queue_request_t dep_pair[] = {request("/A/base"), request("/A/update")};
+    assert(install_queue_add(dep_pair, 2, ids) == 0);
+    wait_state(ids[0], "installing");
+    finish(1); /* base completes */
+    wait_state(ids[0], "completed");
+    wait_state(ids[1], "installing");
+    usleep(1200000); /* wait 1.2s > 1s TTL */
+    st = job_state(ids[0]);
+    assert(!strcmp(st, "completed")); /* base still preserved because update is pending */
+    free(st);
+    finish(1);
+    wait_state(ids[1], "completed");
+    /* Now dependent update is completed, base auto-clears */
+    wait_state(ids[0], "missing");
+    /* Update itself auto-clears after its TTL */
+    wait_state(ids[1], "missing");
+
+    /* Multiple dependents keep base alive until ALL dependents finish */
+    reset();
+    install_queue_set_finished_ttl(1);
+    install_queue_request_t multi_deps[] = {request("/A/base"), request("/A/update"), request("/A/dlc")};
+    uint64_t multi_ids[3];
+    assert(install_queue_add(multi_deps, 3, multi_ids) == 0);
+    wait_state(multi_ids[0], "installing");
+    finish(1); /* base completes */
+    wait_state(multi_ids[0], "completed");
+    wait_state(multi_ids[1], "installing");
+    usleep(1200000); /* base TTL expires while update is installing */
+    st = job_state(multi_ids[0]);
+    assert(!strcmp(st, "completed"));
+    free(st);
+    finish(1); /* update completes */
+    wait_state(multi_ids[1], "completed");
+    wait_state(multi_ids[2], "installing");
+    st = job_state(multi_ids[0]);
+    assert(!strcmp(st, "completed")); /* base STILL preserved because DLC is pending */
+    free(st);
+    usleep(1200000); /* update TTL expires while DLC is still pending */
+    st = job_state(multi_ids[0]);
+    assert(!strcmp(st, "completed")); /* base still preserved */
+    free(st);
+    st = job_state(multi_ids[1]);
+    assert(!strcmp(st, "missing")); /* update auto-cleared because dependents only need base */
+    free(st);
+    finish(1); /* dlc completes */
+    wait_state(multi_ids[2], "completed");
+    wait_state(multi_ids[0], "missing");
+    wait_state(multi_ids[2], "missing");
+
+    /* Manual clear_finished clears update but preserves base while dependent DLC is pending */
+    reset();
+    install_queue_set_finished_ttl(60); /* long TTL so auto-clear doesn't fire */
+    assert(install_queue_add(multi_deps, 3, multi_ids) == 0);
+    wait_state(multi_ids[0], "installing");
+    finish(1); /* base completes */
+    wait_state(multi_ids[0], "completed");
+    wait_state(multi_ids[1], "installing");
+    finish(1); /* update completes */
+    wait_state(multi_ids[1], "completed");
+    wait_state(multi_ids[2], "installing");
+    install_queue_clear_finished();
+    st = job_state(multi_ids[0]);
+    assert(!strcmp(st, "completed")); /* base preserved because DLC is pending */
+    free(st);
+    st = job_state(multi_ids[1]);
+    assert(!strcmp(st, "missing")); /* update cleared because it's not a base */
+    free(st);
+    finish(1); /* dlc completes */
+    wait_state(multi_ids[2], "completed");
+    install_queue_clear_finished();
+    wait_state(multi_ids[0], "missing");
+    wait_state(multi_ids[2], "missing");
+
+    /* TTL = 0 clears terminal jobs immediately on next tick */
+    reset();
+    install_queue_set_finished_ttl(0);
+    assert(install_queue_get_finished_ttl() == 0);
+    assert(install_queue_add(&single_job, 1, ids) == 0);
+    wait_state(ids[0], "installing");
+    finish(1);
+    wait_state(ids[0], "missing");
+
+    /* Negative TTL disables auto-clearing */
+    reset();
+    install_queue_set_finished_ttl(-1);
+    assert(install_queue_add(&single_job, 1, ids) == 0);
+    wait_state(ids[0], "installing");
+    finish(1);
+    wait_state(ids[0], "completed");
+    usleep(1200000);
+    st = job_state(ids[0]);
+    assert(!strcmp(st, "completed"));
+    free(st);
+
+    /* Retry before TTL resets expiration */
+    reset();
+    install_queue_set_finished_ttl(1);
+    assert(install_queue_add(&single_job, 1, ids) == 0);
+    wait_state(ids[0], "installing");
+    assert(install_queue_cancel(ids[0]) == 0);
+    release_cleanup();
+    wait_state(ids[0], "canceled");
+    assert(install_queue_retry(ids[0]) == 0);
+    wait_state(ids[0], "installing");
+    usleep(1200000);
+    st = job_state(ids[0]);
+    assert(!strcmp(st, "installing"));
+    free(st);
+    finish(1);
+    wait_state(ids[0], "completed");
+    wait_state(ids[0], "missing");
+
     install_queue_shutdown();
     assert(install_queue_init() == 0);
     json = install_queue_to_json(); assert(strstr(json, "\"jobs\":[]")); free(json);
     install_queue_shutdown();
-    puts("Install queue: FIFO, dependencies, redundant browser aborts, cancel, cleanup, retry, submission, source ownership and atomic batches passed");
+    puts("Install queue: FIFO, dependencies, redundant browser aborts, cancel, cleanup, retry, submission, source ownership, auto-clearing and atomic batches passed");
 }

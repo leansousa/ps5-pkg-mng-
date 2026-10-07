@@ -21,6 +21,7 @@
 #include <sys/time.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <signal.h>
 
 #include "stream_server.h"
 #include "installer.h"
@@ -438,6 +439,7 @@ static void write_fixture(void) {
 }
 
 int main(void) {
+    signal(SIGPIPE, SIG_IGN);
     setvbuf(stdout, NULL, _IOLBF, 0);
     printf("==============================================\n");
     printf(">>> RUNNING DIRECT-INSTALL LIVE E2E TEST <<<\n");

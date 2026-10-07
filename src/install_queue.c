@@ -23,7 +23,7 @@ typedef struct {
     float progress;
     int direct_storage, waiting_for_disc;
     char prompt[256];
-    time_t seen, selected, checked;
+    time_t seen, selected, checked, finished;
 } queue_job_t;
 
 static queue_job_t *jobs;
@@ -34,6 +34,7 @@ static pthread_mutex_t dispatch = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t thread;
 static int running, created;
 static uint64_t next_id, next_order, active_id, current_run;
+static int finished_ttl_seconds = INSTALL_QUEUE_FINISHED_TTL_DEFAULT;
 
 static queue_job_t *find(uint64_t id) {
     for (size_t i = 0; jobs && i < INSTALL_QUEUE_MAX_JOBS; i++)
@@ -214,6 +215,7 @@ int install_queue_cancel(uint64_t id) {
     }
     int active = active_id == id;
     job->state = active ? QUEUE_CANCELING : QUEUE_CANCELED;
+    if (!active) job->finished = time(NULL);
     snprintf(job->error, sizeof(job->error), "Canceled");
     char owner[65], live_path[80], pkg_path[512], title_id[32];
     snprintf(title_id, sizeof(title_id), "%s", job->request.title_id);
@@ -229,7 +231,7 @@ int install_queue_cancel(uint64_t id) {
     if (result == -2) {
         pthread_mutex_lock(&mutex);
         job = find(id);
-        if (job) { job->state = QUEUE_INSTALLING; job->error[0] = 0; }
+        if (job) { job->state = QUEUE_INSTALLING; job->error[0] = 0; job->finished = 0; }
         pthread_mutex_unlock(&mutex);
     }
     pthread_mutex_unlock(&dispatch);
@@ -252,6 +254,7 @@ int install_queue_retry(uint64_t id) {
     job->run_id = current_run;
     job->order = ++next_order;
     job->state = QUEUE_QUEUED;
+    job->finished = 0;
     job->error[0] = job->live_path[0] = 0;
     job->downloaded = 0;
     job->progress = 0;
@@ -267,6 +270,7 @@ int install_queue_retry(uint64_t id) {
                 other->order = ++next_order;
                 other->state = QUEUE_QUEUED;
                 other->error[0] = 0;
+                other->finished = 0;
             }
         }
     }
@@ -274,18 +278,36 @@ int install_queue_retry(uint64_t id) {
     return 0;
 }
 
+/* Submitted bases carry dependency evidence until their dependents
+ * have been dispatched. Do not erase that evidence while needed. */
+static int terminal_job_needed(const queue_job_t *job) {
+    if (!job || strcmp(job->request.kind, "base") != 0) return 0;
+    if (job->state != QUEUE_SUBMITTED && job->state != QUEUE_COMPLETED) return 0;
+    for (size_t j = 0; jobs && j < INSTALL_QUEUE_MAX_JOBS; j++) {
+        if (jobs[j].id && jobs[j].order > job->order && pending(jobs[j].state) && dependent(&jobs[j]) &&
+            !strcmp(jobs[j].request.title_id, job->request.title_id)) return 1;
+    }
+    return 0;
+}
+
+int install_queue_get_finished_ttl(void) {
+    pthread_mutex_lock(&mutex);
+    int ttl = finished_ttl_seconds;
+    pthread_mutex_unlock(&mutex);
+    return ttl;
+}
+
+void install_queue_set_finished_ttl(int seconds) {
+    pthread_mutex_lock(&mutex);
+    finished_ttl_seconds = seconds;
+    pthread_mutex_unlock(&mutex);
+}
+
 void install_queue_clear_finished(void) {
     pthread_mutex_lock(&mutex);
     for (size_t i = 0; jobs && i < INSTALL_QUEUE_MAX_JOBS; i++) {
         queue_job_t *job = &jobs[i];
-        /* Submitted bases carry dependency evidence until their dependents
-         * have been dispatched. Do not erase that evidence with UI history. */
-        int needed = 0;
-        if (job->state == QUEUE_SUBMITTED || job->state == QUEUE_COMPLETED)
-            for (size_t j = 0; j < INSTALL_QUEUE_MAX_JOBS; j++)
-                if (jobs[j].id && pending(jobs[j].state) && dependent(&jobs[j]) &&
-                    !strcmp(jobs[j].request.title_id, job->request.title_id)) needed = 1;
-        if (job->id && !pending(job->state) && !needed) memset(job, 0, sizeof(*job));
+        if (job->id && !pending(job->state) && !terminal_job_needed(job)) memset(job, 0, sizeof(*job));
     }
     pthread_mutex_unlock(&mutex);
 }
@@ -328,7 +350,10 @@ int install_queue_attach(uint64_t id, const char *owner, const char *live_path) 
     if (job) {
         snprintf(job->live_path, sizeof(job->live_path), "%s", live_path);
         job->state = rc == 0 ? QUEUE_INSTALLING : QUEUE_FAILED;
-        if (rc) snprintf(job->error, sizeof(job->error), "Could not start browser install (code %d)", rc);
+        if (rc) {
+            snprintf(job->error, sizeof(job->error), "Could not start browser install (code %d)", rc);
+            job->finished = time(NULL);
+        }
     }
     pthread_mutex_unlock(&mutex);
     if (rc) ws_direct_cancel_owned(owner, live_path + 5);
@@ -414,10 +439,22 @@ int install_queue_add_json(const char *json, uint64_t *ids, size_t *out_count) {
 static void tick(void) {
     uint64_t expired[INSTALL_QUEUE_MAX_JOBS];
     size_t expired_count = 0;
+    time_t now = time(NULL);
     pthread_mutex_lock(&mutex);
-    for (size_t i = 0; i < INSTALL_QUEUE_MAX_JOBS; i++)
-        if (jobs[i].id && pending(jobs[i].state) && jobs[i].state != QUEUE_CANCELING &&
-            jobs[i].request.owner[0] && time(NULL) - jobs[i].seen > 20) expired[expired_count++] = jobs[i].id;
+    for (size_t i = 0; jobs && i < INSTALL_QUEUE_MAX_JOBS; i++) {
+        queue_job_t *job = &jobs[i];
+        if (!job->id) continue;
+        if (!pending(job->state)) {
+            if (!job->finished || job->finished > now) job->finished = now;
+            if (finished_ttl_seconds >= 0 && (now - job->finished) >= finished_ttl_seconds && !terminal_job_needed(job)) {
+                install_log("[QUEUE] Auto-cleared job=%llu outcome=%s", (unsigned long long)job->id, state_name(job->state));
+                memset(job, 0, sizeof(*job));
+                continue;
+            }
+        }
+        if (pending(job->state) && job->state != QUEUE_CANCELING &&
+            job->request.owner[0] && now - job->seen > 20) expired[expired_count++] = job->id;
+    }
     pthread_mutex_unlock(&mutex);
     for (size_t i = 0; i < expired_count; i++) install_queue_cancel(expired[i]);
     pthread_mutex_lock(&mutex);
@@ -452,6 +489,7 @@ static void tick(void) {
                 else if (status.completed) active->state = QUEUE_COMPLETED;
                 else active->state = QUEUE_FAILED;
                 if (active->state == QUEUE_FAILED) snprintf(active->error, sizeof(active->error), "%s", status.prompt_message[0] ? status.prompt_message : "Installation failed");
+                if (!pending(active->state)) active->finished = time(NULL);
                 install_log("[QUEUE] Finished job=%llu outcome=%s error=%.160s", (unsigned long long)active->id, state_name(active->state), active->error);
                 active_id = 0;
             }
@@ -485,7 +523,10 @@ static void tick(void) {
     pthread_mutex_lock(&mutex);
     active = find(snapshot.id);
     if (!active || active->state != QUEUE_CHECKING) {
-        if (active && active->state == QUEUE_CANCELING) active->state = QUEUE_CANCELED;
+        if (active && active->state == QUEUE_CANCELING) {
+            active->state = QUEUE_CANCELED;
+            active->finished = time(NULL);
+        }
         if (active_id == snapshot.id) active_id = 0;
         pthread_mutex_unlock(&mutex); pthread_mutex_unlock(&dispatch); return;
     }
@@ -509,6 +550,7 @@ static void tick(void) {
         active->state = parse_rc ? QUEUE_FAILED : redundant_browser_package ? QUEUE_ABORTED : QUEUE_BLOCKED;
         snprintf(active->error, sizeof(active->error), "%s", parse_rc ? "Package source unavailable or unreadable. Reconnect the drive/share and retry." :
                  missing_base ? "Base is not installed or queued before this package" : eligibility.disabled_reason);
+        if (!pending(active->state)) active->finished = time(NULL);
         active_id = 0;
         pthread_mutex_unlock(&mutex); pthread_mutex_unlock(&dispatch);
         if (parse_rc) revalidate_dependents(snapshot.request.title_id);
@@ -526,6 +568,7 @@ static void tick(void) {
             const char *message = rc == -4 ? "Package source unavailable. Reconnect the drive/share and retry." :
                 rc == -10 ? "Insufficient installation storage space" : rc == -11 ? "Could not create staging directory" : "Could not start installation";
             snprintf(active->error, sizeof(active->error), "%s (code %d)", message, rc);
+            active->finished = time(NULL);
             active_id = 0;
         }
     }
@@ -552,6 +595,7 @@ int install_queue_init(void) {
     jobs = calloc(INSTALL_QUEUE_MAX_JOBS, sizeof(*jobs));
     if (!jobs) { pthread_mutex_unlock(&mutex); return -1; }
     active_id = 0;
+    finished_ttl_seconds = INSTALL_QUEUE_FINISHED_TTL_DEFAULT;
     running = 1;
     if (pthread_create(&thread, NULL, worker, NULL)) { running = 0; free(jobs); jobs = NULL; pthread_mutex_unlock(&mutex); return -1; }
     created = 1;

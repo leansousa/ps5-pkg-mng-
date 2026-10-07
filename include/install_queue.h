@@ -26,8 +26,12 @@ typedef struct {
     uint64_t total_bytes;
 } install_queue_request_t;
 
+#define INSTALL_QUEUE_FINISHED_TTL_DEFAULT 60
+
 int install_queue_init(void);
 void install_queue_shutdown(void);
+int install_queue_get_finished_ttl(void);
+void install_queue_set_finished_ttl(int seconds);
 int install_queue_add(const install_queue_request_t *requests, size_t count, uint64_t *ids);
 int install_queue_add_json(const char *json, uint64_t *ids, size_t *count);
 int install_queue_add_paths(const char *base, const char *update);
