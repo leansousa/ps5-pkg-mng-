@@ -4,20 +4,35 @@ import { formatBytes } from '../../utils/formatters';
 import { pendingStates, queueStateLabel, queuePrompt } from '../../utils/installQueue';
 import { iconUrlFor } from '../../BlurIcon';
 import PackageThumbnail from '../PackageThumbnail';
+import { isPlayStation } from '../../constants/config';
 
-export default function InstallQueuePanel({ queue, onClose, debugEnabled = false }) {
+export default function InstallQueuePanel({ show, queue, onClose, debugEnabled = false }) {
+  const isShown = show === undefined || Boolean(show);
+
   useEffect(() => {
+    if (!isShown) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    const close = (event) => { if (event.key === 'Escape') onClose(); };
+    const close = (event) => {
+      if (event.key === 'Escape') {
+        if (isPlayStation) return;
+        onClose();
+      }
+    };
     window.addEventListener('keydown', close);
-    return () => { document.body.style.overflow = previousOverflow; window.removeEventListener('keydown', close); };
-  }, [onClose]);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', close);
+    };
+  }, [isShown, onClose]);
+
+  if (!isShown) return null;
+
   const rank = (job) => ['checking', 'preparing', 'installing', 'canceling'].includes(job.state) ? 0 : pendingStates.has(job.state) ? 1 : 2;
   const ordered = [...queue.jobs].sort((a, b) => rank(a) - rank(b) || a.order - b.order);
   const { overview } = queue;
   return (
-    <div className="fixed inset-0 z-[60] bg-black/60" data-queue-backdrop="true" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div data-modal-dialog="true" className="fixed inset-0 z-[60] bg-black/60" data-queue-backdrop="true" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <aside id="install-queue-panel" role="dialog" aria-modal="true" aria-label="Installation queue" data-modal-dialog="true"
       className="absolute top-0 right-0 bottom-0 w-full sm:w-[430px] max-w-full bg-[#12131a] border-l border-white/20 shadow-2xl flex flex-col">
       <div className="p-4 border-b border-white/10 space-y-3">
