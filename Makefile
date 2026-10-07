@@ -20,7 +20,7 @@ LIBS     := $(TARGET)/lib/libmicrohttpd.a \
             -lSceNetCtl -lSceUserService -lSceSystemService \
             -lSceAppInstUtil -lSceNet
 
-SRCS := src/main.c src/pkg_parser.c src/pkg_scanner.c src/pkg_cache.c src/smb_client.c src/smb_debug_log.c src/debug_log_retention.c src/installer.c \
+SRCS := src/main.c src/pkg_parser.c src/pkg_scanner.c src/pkg_cache.c src/smb_client.c src/smb_debug_log.c src/debug_log_retention.c src/installer.c src/install_queue.c \
         src/http_server.c src/stream_server.c src/stream_debug_log.c src/notification.c \
         src/multipart.c src/miniz.c src/app_info.c src/sqlite3.c src/icon_blurhash.c src/leftovers.c src/app_diag.c \
         src/app_installer.c
@@ -56,7 +56,7 @@ LDFLAGS := -Wl,--gc-sections
 
 # Host test build (uses tests/mock_smb.c instead of real libsmb2; MHD not needed)
 TEST_CFLAGS := -g -O0 -Wall -Wextra -Iinclude -Ideps/libsmb2/include -Ideps/libsmb2/include/smb2 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_THREADSAFE=2 -DSQLITE_OMIT_WAL -DPKGMGR_BUILD_COMMIT=\"$(BUILD_COMMIT)\" -DPKGMGR_BUILD_DATE=\"$(BUILD_DATE)\"
-TEST_SRCS := src/multipart.c src/pkg_parser.c src/pkg_scanner.c src/pkg_cache.c src/miniz.c src/smb_client.c src/smb_debug_log.c src/debug_log_retention.c src/installer.c src/stream_server.c src/stream_debug_log.c src/notification.c src/app_info.c src/icon_blurhash.c src/leftovers.c src/app_diag.c src/app_installer.c src/sqlite3.c tests/mock_smb.c tests/ps5_sim.c src/ws_upload.c src/ws_stream.c tests/ws_test_client.c
+TEST_SRCS := src/multipart.c src/pkg_parser.c src/pkg_scanner.c src/pkg_cache.c src/miniz.c src/smb_client.c src/smb_debug_log.c src/debug_log_retention.c src/installer.c src/install_queue.c src/stream_server.c src/stream_debug_log.c src/notification.c src/app_info.c src/icon_blurhash.c src/leftovers.c src/app_diag.c src/app_installer.c src/sqlite3.c tests/mock_smb.c tests/ps5_sim.c src/ws_upload.c src/ws_stream.c tests/ws_test_client.c
 TESTS := test_smb_auth test_smb_scan test_pkg_parser test_pkg_scanner test_pkg_cache test_installer test_leftovers test_edge_cases test_multipart test_stream_sim test_ws_upload test_direct_install_e2e test_ws_stream test_ws_stream_far test_parse_mem
 
 all: $(ELF)
@@ -141,7 +141,12 @@ test-install-service:
 	cc $(TEST_CFLAGS) -o build/test_install_process tests/test_install_process.c tests/install_helper_fixture.S src/install_process.c src/install_ipc.c -lpthread
 	./build/test_install_process
 
-test: $(PARAM_JSON_HEADER) $(ICON0_PNG_HEADER) test-install-service
+test-install-queue:
+	mkdir -p build
+	cc $(TEST_CFLAGS) -o build/test_install_queue tests/test_install_queue.c src/install_queue.c src/sqlite3.c -lpthread -lm -ldl
+	./build/test_install_queue
+
+test: $(PARAM_JSON_HEADER) $(ICON0_PNG_HEADER) test-install-service test-install-queue
 	@for t in $(TESTS); do \
 		echo "=== CC tests/$$t ==="; \
 		cc $(TEST_CFLAGS) -o tests/$$t tests/$$t.c $(TEST_SRCS) -lpthread -lm -ldl || exit 1; \
@@ -156,6 +161,6 @@ test: $(PARAM_JSON_HEADER) $(ICON0_PNG_HEADER) test-install-service
 dist-clean: clean
 	rm -rf frontend/dist frontend/node_modules
 
-.PHONY: all clean test test-install-service frontend-build dist-clean mock
+.PHONY: all clean test test-install-service test-install-queue frontend-build dist-clean mock
 mock:
 	node frontend/mock-server.js

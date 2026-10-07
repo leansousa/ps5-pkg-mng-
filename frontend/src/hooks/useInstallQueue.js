@@ -1,0 +1,226 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { enqueueJobs, getInstallQueue, getQueueOwner, cancelQueueJob, retryQueueJob,
+  clearFinishedJobs, heartbeatQueue, disconnectQueueSource, packageJob } from '../api/queue';
+import { checkUploadEligibility } from '../api/directInstall';
+import { parseLocalPkg } from '../utils/parseLocalPkg';
+import { fileKey, pendingStates, terminalStates, queueOverview, orderBrowserFiles, canQueueBrowserFile } from '../utils/installQueue';
+import { useWakeLock } from './useWakeLock';
+import { getBrowserTitle } from '../utils/title';
+
+export function useInstallQueue(upload, { showToast, onResolved, appVersion }) {
+  const [snapshot, setSnapshot] = useState({ jobs: [], active_id: 0 });
+  const [connected, setConnected] = useState(true);
+  const [files, setFiles] = useState([]);
+  const [skipped, setSkipped] = useState([]);
+  const latest = useRef({ upload, showToast, onResolved, files, snapshot });
+  latest.current = { upload, showToast, onResolved, files, snapshot };
+  const filesRef = useRef(new Map());
+  const enqueuingFiles = useRef(new Map());
+  const uploading = useRef(0);
+  const started = useRef(new Map());
+  const refreshSerial = useRef(0);
+  const seen = useRef(new Map());
+  const rate = useRef({ id: 0, bytes: 0, time: 0, speed: 0 });
+  const owner = getQueueOwner();
+  const overview = queueOverview(snapshot.jobs);
+  useWakeLock(snapshot.jobs.some((job) => job.source_id === owner.slice(0, 16) && pendingStates.has(job.state)));
+
+  const refresh = useCallback(async () => {
+    const serial = ++refreshSerial.current;
+    const admissions = new Map(enqueuingFiles.current);
+    try {
+      const data = await getInstallQueue();
+      if (serial !== refreshSerial.current) return;
+      if (!Array.isArray(data.jobs)) throw new Error('Queue unavailable');
+      data.jobs.sort((a, b) => a.order - b.order);
+      latest.current.snapshot = data;
+      // Release reservations only after a successful poll started after admission.
+      // A lost or superseded refresh must not make an accepted source clearable.
+      admissions.forEach((jobId, id) => {
+        if (jobId && enqueuingFiles.current.get(id) === jobId) enqueuingFiles.current.delete(id);
+      });
+      setSnapshot(data);
+      setConnected(true);
+      let filesChanged = false;
+      for (const job of data.jobs) {
+        const before = seen.current.get(job.id);
+        if (before !== job.state && job.state === 'aborted' && job.source_id === owner.slice(0, 16)) {
+          const local = filesRef.current.get(job.file_key);
+          if (local) {
+            local.eligibility = { ...local.eligibility, can_install: false, install_disabled_reason: job.error };
+            filesChanged = true;
+          }
+        }
+        if (before && before !== job.state && terminalStates.has(job.state)) {
+          latest.current.showToast(`${job.title_name || job.path || 'Package'}: ${job.state === 'submitted' ? 'submitted to PS5' : job.state}`, job.state === 'failed' ? 'error' : 'info');
+          latest.current.onResolved?.();
+        }
+        seen.current.set(job.id, job.state);
+      }
+      if (filesChanged) setFiles(Array.from(filesRef.current.values()));
+      const active = data.jobs.find((job) => job.id === data.active_id);
+      const now = Date.now();
+      const before = rate.current;
+      const speed = active && before.id === active.id && now > before.time
+        ? Math.max(0, active.downloaded_bytes - before.bytes) * 1000 / (now - before.time) : 0;
+      rate.current = { id: active?.id || 0, bytes: active?.downloaded_bytes || 0, time: now, speed };
+      if (active?.source_id === owner.slice(0, 16) && active.state === 'preparing' && !uploading.current && started.current.get(active.id) !== active.order) {
+        const local = filesRef.current.get(active.file_key);
+        if (!local?.details) { await cancelQueueJob(active.id); return; }
+        uploading.current = active.id;
+        started.current.set(active.id, active.order);
+        latest.current.upload.reset();
+        latest.current.upload.upload({ ...local, jobId: active.id }).then(async (result) => {
+          if (result.outcome !== 'complete') {
+            await cancelQueueJob(active.id).catch(() => {});
+            if (result.error) latest.current.showToast(result.error, 'error');
+          }
+        }).finally(() => { if (uploading.current === active.id) uploading.current = 0; });
+      }
+      if (uploading.current) {
+        const job = data.jobs.find((entry) => entry.id === uploading.current);
+        if (!job || ['canceled', 'failed', 'blocked', 'canceling', 'aborted'].includes(job.state)) latest.current.upload.cancel();
+      }
+    } catch (e) { if (serial === refreshSerial.current) setConnected(false); }
+  }, [owner]);
+
+  useEffect(() => {
+    let stopped = false;
+    let timer;
+    const poll = async () => {
+      await refresh();
+      if (!stopped) timer = setTimeout(poll, 1000);
+    };
+    poll();
+    const heartbeat = setInterval(() => heartbeatQueue().catch(() => {}), 3000);
+    const unload = () => disconnectQueueSource();
+    window.addEventListener('pagehide', unload);
+    return () => { stopped = true; clearTimeout(timer); clearInterval(heartbeat); window.removeEventListener('pagehide', unload); };
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!overview.pending.length) return undefined;
+    document.title = `${overview.percent === null ? '(Installing)' : `(${Math.floor(overview.percent)}%)`} ${getBrowserTitle(appVersion)}`;
+    return () => { document.title = getBrowserTitle(appVersion); };
+  }, [overview.pending.length, overview.percent, appVersion]);
+
+  useEffect(() => () => {
+    filesRef.current.forEach((file) => { if (file.iconUrl) URL.revokeObjectURL(file.iconUrl); });
+    filesRef.current.clear();
+  }, []);
+
+  const perform = useCallback(async (action) => {
+    try { const result = await action(); await refresh(); return result; }
+    catch (e) { latest.current.showToast(e.message, 'error'); return null; }
+  }, [refresh]);
+
+  const enqueuePackages = useCallback((packages) => perform(async () => {
+    const result = await enqueueJobs(packages.map(packageJob));
+    latest.current.showToast(`${result.ids.length} package${result.ids.length === 1 ? '' : 's'} added to install queue`, 'success');
+    return result;
+  }), [perform]);
+
+  const addFiles = useCallback(async (found, unreadable = []) => {
+    if (unreadable.length) setSkipped((list) => [...list, ...unreadable]);
+    const added = [];
+    for (const entry of found) {
+      const id = fileKey(entry);
+      if (filesRef.current.has(id)) continue;
+      const local = { ...entry, id, status: 'reading' };
+      filesRef.current.set(id, local);
+      added.push(local);
+    }
+    setFiles(Array.from(filesRef.current.values()));
+    // Bound package reads while preserving the selected-file order.
+    const pending = [...added];
+    const inspect = async () => {
+      while (pending.length) {
+        const local = pending.shift();
+        if (filesRef.current.get(local.id) !== local) continue;
+        try {
+          local.details = await parseLocalPkg(local.file);
+          if (filesRef.current.get(local.id) !== local) continue;
+          if (local.details.icon_size > 0) {
+            local.iconUrl = URL.createObjectURL(local.file.slice(local.details.icon_offset,
+              local.details.icon_offset + local.details.icon_size, 'image/png'));
+          }
+          local.eligibility = await checkUploadEligibility(local.details);
+          if (filesRef.current.get(local.id) !== local) continue;
+          local.status = 'ready';
+        } catch (e) {
+          if (filesRef.current.get(local.id) !== local) continue;
+          local.status = 'error'; local.error = e.message;
+        }
+        setFiles(Array.from(filesRef.current.values()));
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, pending.length) }, inspect));
+  }, []);
+
+  const enqueueFiles = useCallback(async (ids) => {
+    const selected = ids.map((id) => filesRef.current.get(id)).filter((local) => local?.details && !enqueuingFiles.current.has(local.id));
+    if (!selected.length) return null;
+    // Retain upload sources while admission is in flight, before jobs appear in a poll.
+    selected.forEach((local) => enqueuingFiles.current.set(local.id, 0));
+    const result = await perform(async () => {
+      const pending = [...selected];
+      const inspect = async () => {
+        while (pending.length) {
+          const local = pending.shift();
+          local.eligibility = await checkUploadEligibility(local.details);
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(3, pending.length) }, inspect));
+      setFiles(Array.from(filesRef.current.values()));
+      const addable = selected.filter((local) => filesRef.current.get(local.id) === local &&
+        canQueueBrowserFile(local, latest.current.snapshot.jobs, owner.slice(0, 16), selected));
+      if (addable.length < selected.length) latest.current.showToast(
+        `${selected.length - addable.length} package(s) cannot be queued: ${selected.find((local) => !addable.includes(local))?.eligibility?.install_disabled_reason || 'already installed or queued'}`, 'info');
+      if (!addable.length) return null;
+      const ordered = orderBrowserFiles(addable);
+      const response = await enqueueJobs(ordered.map((local) => ({ owner, file_key: local.id,
+        title_id: local.details.title_id, title_name: local.details.title_name,
+        content_id: local.details.content_id, kind: local.details.pkg_type,
+        version: local.details.app_version, total_bytes: local.file.size })));
+      ordered.forEach((local, index) => enqueuingFiles.current.set(local.id, response.ids[index]));
+      return response;
+    });
+    selected.forEach((local) => {
+      if (!result || enqueuingFiles.current.get(local.id) === 0) enqueuingFiles.current.delete(local.id);
+    });
+    return result;
+  }, [owner, perform]);
+
+  const retry = useCallback((job) => {
+    if (job.source_id && (job.source_id !== owner.slice(0, 16) || !filesRef.current.has(job.file_key))) {
+      latest.current.showToast('Select this package again in Direct Install to retry it.', 'info');
+      return;
+    }
+    return perform(() => retryQueueJob(job.id));
+  }, [owner, perform]);
+
+  const filePending = useCallback((id) => enqueuingFiles.current.has(id) || latest.current.snapshot.jobs.some((job) =>
+    job.file_key === id && job.source_id === owner.slice(0, 16) && pendingStates.has(job.state)), [owner]);
+
+  const removeFile = useCallback((id) => {
+    if (filePending(id)) return;
+    const local = filesRef.current.get(id);
+    if (local?.iconUrl) URL.revokeObjectURL(local.iconUrl);
+    filesRef.current.delete(id);
+    setFiles(Array.from(filesRef.current.values()));
+  }, [filePending]);
+
+  const clearFiles = useCallback(() => {
+    filesRef.current.forEach((local, id) => {
+      if (filePending(id)) return;
+      if (local.iconUrl) URL.revokeObjectURL(local.iconUrl);
+      filesRef.current.delete(id);
+    });
+    setFiles(Array.from(filesRef.current.values()));
+    setSkipped([]);
+  }, [filePending]);
+
+  return { ...snapshot, connected, overview, files, skipped, uploadSpeed: upload.uploadSpeed, installSpeed: rate.current.speed, addFiles, removeFile, clearFiles, enqueueFiles, enqueuePackages,
+    cancel: (job) => perform(() => cancelQueueJob(job.id)), retry,
+    clearFinished: () => perform(clearFinishedJobs), refresh, sourceId: owner.slice(0, 16) };
+}

@@ -20,6 +20,15 @@ You must build the React UI first. This compiles the JSX into the single-file bu
 make frontend-build
 ```
 
+To use the Vite dev server against a console:
+```bash
+cd frontend && PKG_BACKEND=192.168.1.50:8844 PKG_NO_HMR=1 npm run dev
+```
+The dev server proxies the API and upload WebSocket (`PKG_BACKEND_WS_PORT`,
+default 18842). Disable HMR while installing: browser-backed jobs need their
+source tab, and reloading it cancels those jobs. Console-accessible jobs keep
+running in the backend.
+
 ### 2. Build the SDK Docker Image
 If you haven't already, build the PS5 payload SDK Docker container:
 ```bash
@@ -60,6 +69,17 @@ You can run the full host test suite locally without Docker:
 ```bash
 make test
 ```
+
+`make test-install-queue` exercises the real backend scheduler with a controlled
+installer: FIFO, dependency blocking and retry, independent removal, worker
+cleanup before advancing, offline submission, browser ownership, duplicate
+admission, malformed batches and process-lifetime queue reset.
+
+With a built frontend, `node tools/queue-ui-smoke.mjs` starts a local mock server
+and headless Chrome. It checks base/update removal, bulk DLC actions, browser
+reload, queue panel rendering and a browser upload continuing during navigation.
+Set `CHROME_BIN` if Chrome is not installed at the default macOS location.
+`PKG_MOCK_OFFLINE=1 npm run mock` simulates system-managed submission.
 
 `make test-install-service` exercises the actual helper protocol in freshly
 executed host processes with stubbed PS5 APIs. It covers consecutive installs,
@@ -188,17 +208,17 @@ while the rest still uploads:
   Served through the existing HTTP range path via the `live:<id>`
   virtual-stream scheme (`src/multipart.c`, `src/stream_server.c`).
 - Metadata: additive `pkg_parser_parse_mem()`; install entry
-  `installer_start_live()`; `/api/install` routes `live:` URIs.
+  `installer_start_live()`; `/api/queue/attach` binds a selected job to its owned `live:` URI.
 - Frontend: `DirectInstallView.jsx` + `api/directInstall.js` +
-  `hooks/useDirectUpload.js` (Header "Direct Install" button and app-wide
-  file drop). Install is
-  enabled at `header_ready`, with sent/installed dual progress.
+  `hooks/useDirectUpload.js`, `hooks/useInstallQueue.js` and app-wide file drop.
+  The navbar opens the shared install panel. Browser jobs start only when the
+  backend selects them; the source tab supplies their File objects.
 - Upload scheduling: the sender uploads the header first, then follows installer
   seeks with a bounded window of up to eight 1 MiB segments and up to two
   uploads in flight.
   Busy replies retry the same segment; requests for in-flight segments are
   coalesced. The WebSocket listener starts on demand and closes when idle.
-- With install debug mode enabled, the install screen shows WebSocket receive
+- With install debug mode enabled, the install queue shows WebSocket receive
   and install speed graphs. Stream logs include build identity, receive and
   accepted throughput, cache duplicate/reload/eviction counters, and periodic
   browser file-read and send-to-ACK timing summaries. The selected debug
@@ -230,3 +250,37 @@ For a fast build and deploy cycle over the local network, use the `deploy.sh` sc
 ./deploy.sh [PS5_IP]
 ```
 (Requires PS5 IP as the first argument; sends `pkgmgr.elf` via `socat` to port 9021).
+
+### Shared install queue
+
+`src/install_queue.c` owns up to 256 jobs in memory while the daemon runs. All
+installation UI actions submit to `/api/queue`. Legacy file `/api/install` and
+`installer_start_batch` requests also enqueue jobs; base/update is no longer a
+special installer handoff. Batch admission is atomic and pending duplicates are
+skipped. The current run's byte-weighted progress resets after the queue drains.
+
+Jobs move through queued, checking, preparing (browser), installing/canceling,
+and completed/submitted/failed/blocked/canceled states. Failed source jobs require
+Retry. Blocked dependencies remain visible while other eligible jobs continue;
+retrying or adding a base moves its blocked dependents behind it. Eligibility
+and storage are checked again before execution. Multipart media swaps retain a
+waiting state inside the active job.
+
+Browser upload initialization and attachment require the selected job ID and
+its private owner token. Polling exposes only a short source identifier. Source
+tabs send heartbeats and an unload disconnect; a missing heartbeat cancels their
+jobs after 20 seconds. Queued browser jobs hold no upload sessions. Reloading or
+closing their source tab cancels those jobs; select the files again to retry.
+Other clients can view and control the shared queue.
+
+System-managed USB/disc installs finish in the app when the PS5 accepts the
+submission. They are labeled **Submitted to PS5**, never Installed. The queue
+then submits the next job without polling for completion, guessing a timeout,
+or asking for confirmation. An earlier submitted base satisfies offline
+submission ordering for its updates/DLC. Installation progress, outcomes and
+cancellation after submission belong to PS5 Notifications.
+
+Console validation remains necessary: mixed-source queues; cancellation followed
+by another upload; disconnecting SMB/USB; multipart swaps; browser close and
+reload; and offline base/update/DLC submission with rejected system requests.
+Host tests do not establish actual AppInstUtil acceptance behavior on firmware.

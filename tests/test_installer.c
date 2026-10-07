@@ -14,7 +14,7 @@ static int wait_for_state(int want_installing, int want_completed, int timeout_m
         installer_status_t st;
         installer_get_status(&st);
         if (!!st.is_installing == !!want_installing &&
-            (!want_completed || st.completed)) {
+            (!want_completed || st.completed || !strcmp(st.status_str, "submitted"))) {
             return 0;
         }
         usleep(100000);
@@ -138,6 +138,15 @@ int main(void) {
     installer_get_status(&st);
     assert(st.is_installing == 1); /* sparse 3GB stream still running */
     assert(installer_cancel() == 0);
+    assert(installer_start("/tmp/watchdog_big.pkg") == 0);
+    installer_notify_source_error("/tmp/another-session.pkg");
+    installer_get_status(&st);
+    assert(st.is_installing == 1);
+    installer_notify_source_error("/tmp/watchdog_big.pkg");
+    installer_get_status(&st);
+    assert(st.is_installing == 0 && st.failed == 1);
+    assert(st.error_code == -4);
+    assert(strstr(st.prompt_message, "Reconnect the drive/share") != NULL);
     installer_shutdown();
     system("rm -f /tmp/watchdog_big.pkg");
 
@@ -357,16 +366,16 @@ int main(void) {
     assert(wait_for_state(0, 1, 15000) == 0);
 
     installer_get_status(&st);
-    assert(st.completed == 1);
+    assert(st.completed == 0);
     assert(st.failed == 0);
     assert(st.is_direct_storage == 1);
-    assert(st.progress_percent == 100.0f);
-    assert(strcmp(st.status_str, "playable") == 0);
+    assert(st.progress_percent == -1.0f);
+    assert(strcmp(st.status_str, "submitted") == 0);
 
     log_txt = install_log_get_text(&log_sz);
     assert(strstr(log_txt, "Network not connected; using direct storage install") != NULL);
     assert(strstr(log_txt, "Cancel rejected: direct storage install cannot be canceled") != NULL);
-    assert(strstr(log_txt, "Direct filesystem install verified completed") != NULL);
+    assert(strstr(log_txt, "Submitted to PS5 system installer") != NULL);
     free(log_txt);
 
     char *offline_json = installer_status_to_json();
@@ -395,16 +404,16 @@ int main(void) {
     assert(wait_for_state(0, 1, 15000) == 0);
 
     installer_get_status(&st);
-    assert(st.completed == 1);
+    assert(st.completed == 0);
     assert(st.failed == 0);
     assert(st.is_direct_storage == 1);
-    assert(st.progress_percent == 100.0f);
-    assert(strcmp(st.status_str, "playable") == 0);
+    assert(st.progress_percent == -1.0f);
+    assert(strcmp(st.status_str, "submitted") == 0);
 
     log_txt = install_log_get_text(&log_sz);
     assert(strstr(log_txt, "0x80B21121") != NULL);
     assert(strstr(log_txt, "falling back to direct storage install") != NULL);
-    assert(strstr(log_txt, "Direct filesystem install verified completed") != NULL);
+    assert(strstr(log_txt, "Submitted to PS5 system installer") != NULL);
     free(log_txt);
 
     installer_shutdown();
@@ -438,12 +447,12 @@ int main(void) {
             usb_direct_update_seen = 1;
             assert(st.is_direct_storage == 1);
         }
-        if (usb_direct_update_seen && !st.is_installing && st.completed) break;
+        if (usb_direct_update_seen && !st.is_installing && !strcmp(st.status_str, "submitted")) break;
         usleep(100000);
         usb_direct_waited += 100;
     }
     assert(usb_direct_update_seen == 1);
-    assert(st.completed == 1);
+    assert(st.completed == 0);
     assert(st.failed == 0);
     assert(st.is_direct_storage == 1);
     assert(strcmp(st.pkg_path, "/tmp/test_usb_fixtures/wc_usb_upd.pkg") == 0);
@@ -469,7 +478,7 @@ int main(void) {
     assert(wait_for_state(0, 1, 15000) == 0);
 
     installer_get_status(&st);
-    assert(st.completed == 1);
+    assert(st.completed == 0);
     assert(st.failed == 0);
     assert(st.is_direct_storage == 1);
     assert(strcmp(st.pkg_path, "/tmp/test_usb_fixtures/wc_usb_upd.pkg") == 0);

@@ -262,7 +262,12 @@ int ws_direct_cancel_owned(const char *owner, const char *sid) {
      * beacon can abort the live session before the WebSocket close arrives;
      * stopping only the session leaves the installer worker running until a
      * later stream error. */
-    if (installer_cancel() != 0) ws_direct_cancel_session();
+    installer_status_t status;
+    installer_get_status(&status);
+    char expected[80];
+    snprintf(expected, sizeof(expected), "live:%s", sid);
+    if (strcmp(status.pkg_path, expected) || !status.is_installing || installer_cancel_path(expected) != 0)
+        ws_direct_cancel_session();
     pthread_mutex_unlock(&g_owner_mu);
     return 0;
 }
@@ -1062,10 +1067,17 @@ conn_done:
         g_uplink_fd = -1;
     }
     pthread_mutex_unlock(&g_uplink_mu);
-    if (was_uplink && authorized && !finish_received) {
-        install_log("[WS] uploader disconnected before completion; canceling install");
-        if (installer_cancel() != 0 && ws_direct_session_active()) ws_direct_cancel_session();
+    pthread_mutex_lock(&g_owner_mu);
+    if (was_uplink && authorized && !finish_received && ws_live_check_id(authorized_sid)) {
+        installer_status_t status;
+        installer_get_status(&status);
+        char expected[80];
+        snprintf(expected, sizeof(expected), "live:%s", authorized_sid);
+        install_log("[WS] uploader disconnected; aborting its session");
+        if (strcmp(status.pkg_path, expected) || !status.is_installing || installer_cancel_path(expected) != 0)
+            ws_direct_cancel_session();
     }
+    pthread_mutex_unlock(&g_owner_mu);
     free(bin_msg);
     free(rbuf);
     install_log("[WS] connection closed: %lu text/%lu bin frames, %llu bytes, %lu acks, %lu busy",

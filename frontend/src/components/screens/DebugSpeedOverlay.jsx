@@ -14,7 +14,7 @@ function linePath(samples, key, maxValue) {
   }).join(' ');
 }
 
-export default function DebugSpeedOverlay({ uploadSpeed, installSpeed }) {
+export default function DebugSpeedOverlay({ uploadSpeed, installSpeed, inline = false }) {
   const [samples, setSamples] = useState([]);
   const latestRef = useRef({ uploadSpeed, installSpeed });
 
@@ -36,7 +36,7 @@ export default function DebugSpeedOverlay({ uploadSpeed, installSpeed }) {
   const maxValue = Math.max(100 * 1024 * 1024, ...samples.flatMap((sample) => [sample.upload, sample.install]));
 
   return (
-    <aside className="pointer-events-none fixed top-3 right-3 z-[60] w-72 rounded-lg border border-white/15 bg-[#090b12]/95 p-3 text-white shadow-2xl backdrop-blur-sm">
+    <aside className={`pointer-events-none ${inline ? 'w-full' : 'fixed top-3 right-3 z-[60] w-72'} rounded-lg border border-white/15 bg-[#090b12]/95 p-3 text-white shadow-2xl backdrop-blur-sm`}>
       <div className="flex items-center justify-between mb-2">
         <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-400">Debug speeds</span>
         <span className="text-[10px] text-zinc-500">30s</span>

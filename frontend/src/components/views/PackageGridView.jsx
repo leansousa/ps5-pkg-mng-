@@ -1,13 +1,7 @@
 import React from 'react';
 import BlurIcon from '../../BlurIcon';
 import { formatBytes, formatVersion } from '../../utils/formatters';
-
-function getPlatform(titleId) {
-  const normalizedTitleId = (titleId || '').trim().toUpperCase();
-  if (normalizedTitleId.startsWith('PPSA')) return 'PS5';
-  if (normalizedTitleId.startsWith('CUSA')) return 'PS4';
-  return null;
-}
+import { getPlatform } from '../../utils/platform';
 
 export default function PackageGridView({ groupedTitles, searchQuery, onSearch, sortBy, onSort, onOpenTitle, selectedDrive, onBack, settings, installerStatus, loadingPackages, packages = [], page = 0, onPageChange = () => {} }) {
   const setPage = onPageChange;

@@ -1,13 +1,19 @@
 import React from 'react';
 import BlurIcon from '../../BlurIcon';
 import { formatBytes, formatVersion } from '../../utils/formatters';
+import { canQueuePackage, pendingStates } from '../../utils/installQueue';
 import { getInstallStorageOptions } from '../../utils/installStorage';
 
-export default function TitleDetailView({ title: selectedTitle, onBack, onInstall, onInstallBaseAndUpdate, onOpenLeftoverCleanup, installerStatus, storage, settings, drives, selectedDrive }) {
+export default function TitleDetailView({ title: selectedTitle, onBack, onInstall, onInstallBaseAndUpdate, onInstallAllDlcs, installQueue, onOpenLeftoverCleanup, installerStatus, storage, settings, drives, selectedDrive }) {
   const handleBackToPackages = onBack;
   const handleInstall = onInstall;
   const handleInstallBaseAndUpdate = onInstallBaseAndUpdate;
   const handleOpenLeftoverCleanupForTitle = onOpenLeftoverCleanup;
+  const jobs = installQueue?.jobs || [];
+  const queued = (pkg) => jobs.some((job) => job.path === pkg.path && pendingStates.has(job.state));
+  const queueable = (pkg) => canQueuePackage(pkg, jobs);
+  const dlcsToAdd = selectedTitle.dlcs.filter((pkg) => !pkg.is_dlc_installed && queueable(pkg));
+  const queueBusy = jobs.some((job) => pendingStates.has(job.state));
   const sDrive = selectedDrive || { id: '__all__', label: 'All Sources' };
   const maxAvailableFor = (titleId) => getInstallStorageOptions(storage, titleId)
     .reduce((max, option) => Math.max(max, option.free), 0);
@@ -143,7 +149,7 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                           <button
                             type="button"
                             onClick={() => handleInstallBaseAndUpdate(selectedTitle.base, selectedTitle.updates[0])}
-                            disabled={installerStatus.is_installing || selectedTitle.hasLeftover || selectedTitle.base.can_install === false}
+                            disabled={queued(selectedTitle.base) || selectedTitle.hasLeftover || !queueable(selectedTitle.base)}
                             title={selectedTitle.hasLeftover ? 'Leftovers detected on console. Clean up leftovers before installing.' : (selectedTitle.base.install_disabled_reason || '')}
                             className={`w-full px-6 py-3.5 rounded-[2px] ps5-focus-item font-bold text-base transition-all flex items-center justify-center space-x-2.5 whitespace-nowrap ${
                               (selectedTitle.hasLeftover || selectedTitle.base.can_install === false)
@@ -157,7 +163,7 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                               <line x1="12" y1="15" x2="12" y2="3" />
                             </svg>
                             <span>
-                              {selectedTitle.base.is_installed ? 'Upgrade ' : selectedTitle.isPartiallyInstalled ? 'Reinstall ' : 'Install '}
+                              {queued(selectedTitle.base) ? 'Queued ' : queueBusy ? 'Queue ' : selectedTitle.base.is_installed ? 'Upgrade ' : selectedTitle.isPartiallyInstalled ? 'Reinstall ' : 'Install '}
                               {selectedTitle.isMultipart ? `${selectedTitle.sourceType === 'disc' ? 'Disc' : 'Part'} 1 of ${selectedTitle.totalParts} + Update` : 'Base + Update'}
                               {' '}(
                               {selectedTitle.isMultipart
@@ -170,7 +176,7 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                         <button
                           type="button"
                           onClick={() => handleInstall(selectedTitle.base)}
-                          disabled={installerStatus.is_installing || selectedTitle.hasLeftover || selectedTitle.base.can_install === false}
+                          disabled={queued(selectedTitle.base) || selectedTitle.hasLeftover || !queueable(selectedTitle.base)}
                           title={selectedTitle.hasLeftover ? 'Leftovers detected on console. Clean up leftovers before installing.' : (selectedTitle.base.install_disabled_reason || '')}
                           className={`w-full px-5 py-3.5 rounded-[2px] ps5-focus-item font-bold text-base transition-all flex items-center justify-center space-x-2.5 whitespace-nowrap ${
                             (selectedTitle.hasLeftover || selectedTitle.base.can_install === false)
@@ -184,7 +190,7 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                             <line x1="12" y1="15" x2="12" y2="3" />
                           </svg>
                           <span>
-                            {selectedTitle.base.is_installed ? 'Upgrade ' : selectedTitle.isPartiallyInstalled ? 'Reinstall ' : 'Install '}
+                            {queued(selectedTitle.base) ? 'Queued ' : queueBusy ? 'Queue ' : selectedTitle.base.is_installed ? 'Upgrade ' : selectedTitle.isPartiallyInstalled ? 'Reinstall ' : 'Install '}
                             {selectedTitle.isMultipart
                               ? `${selectedTitle.sourceType === 'disc' ? 'Disc' : 'Part'} 1 of ${selectedTitle.totalParts}${selectedTitle.updates.length > 0 ? ' Only' : ''}`
                               : (selectedTitle.updates.length > 0
@@ -276,8 +282,8 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                     const requiredSpace = updFullSize;
                     const maxAvailable = maxAvailableFor(pkg.title_id || selectedTitle.title_id);
                     const notEnoughSpace = !!storage && maxAvailable < requiredSpace;
-                    const canInstall = pkg.can_install !== false;
-                    const isInstallDisabled = !canInstall || notEnoughSpace || installerStatus.is_installing;
+                    const canInstall = queueable(pkg);
+                    const isInstallDisabled = !canInstall || notEnoughSpace;
 
                     let disabledLabel = 'Unavailable';
                     if (selectedTitle.hasLeftover || (pkg.install_disabled_reason && pkg.install_disabled_reason.includes('Leftovers detected'))) {
@@ -341,7 +347,7 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                               </p>
                             )}
 
-                            {!canInstall && pkg.install_disabled_reason ? (
+                            {!canInstall && !queued(pkg) && pkg.install_disabled_reason ? (
                               <p className="text-xs text-amber-400 mt-1">
                                 • {pkg.install_disabled_reason}
                               </p>
@@ -360,13 +366,13 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                                 : 'bg-purple-600 hover:bg-purple-500 text-white cursor-pointer'
                             }`}
                           >
-                            {notEnoughSpace
+                            {queued(pkg) ? 'Queued' : notEnoughSpace
                               ? 'No Space'
                               : !canInstall
                               ? disabledLabel
                               : isUpdMultipart
                               ? `Install ${selectedTitle.sourceType === 'disc' ? 'Disc' : 'Part'} 1 of ${updTotalParts}`
-                              : 'Install Update'}
+                              : queueBusy ? 'Queue Update' : 'Install Update'}
                           </button>
                         </div>
                       </div>
@@ -386,6 +392,10 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                   </span>
                 </h3>
 
+                {dlcsToAdd.length > 1 && <button type="button" onClick={() => onInstallAllDlcs(dlcsToAdd)}
+                  className="ps5-focus-item px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-sm font-semibold rounded-[2px]">
+                  {queueBusy ? 'Queue' : 'Install'} all DLCs ({dlcsToAdd.length})
+                </button>}
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5">
                   {selectedTitle.dlcs.map((pkg, index) => {
                     const isDlcMultipart = !!pkg.is_multipart && (Number(pkg.total_parts) > 1);
@@ -394,8 +404,8 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                     const requiredSpace = dlcFullSize;
                     const maxAvailable = maxAvailableFor(pkg.title_id || selectedTitle.title_id);
                     const notEnoughSpace = !!storage && maxAvailable < requiredSpace;
-                    const canInstall = pkg.can_install !== false;
-                    const isInstallDisabled = !canInstall || notEnoughSpace || installerStatus.is_installing;
+                    const canInstall = queueable(pkg);
+                    const isInstallDisabled = !canInstall || notEnoughSpace;
 
                     let disabledLabel = 'Unavailable';
                     if (selectedTitle.hasLeftover || (pkg.install_disabled_reason && pkg.install_disabled_reason.includes('Leftovers detected'))) {
@@ -483,7 +493,7 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                           </div>
 
                           {/* Warning (if any) */}
-                          {!canInstall && pkg.install_disabled_reason ? (
+                          {!canInstall && !queued(pkg) && pkg.install_disabled_reason ? (
                             <p className="text-[11px] text-amber-400 mt-1 truncate" title={pkg.install_disabled_reason}>
                               • {pkg.install_disabled_reason}
                             </p>
@@ -505,7 +515,7 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                                 : 'bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer'
                             }`}
                           >
-                            {notEnoughSpace ? 'No Space' : !canInstall ? disabledLabel : isDlcMultipart ? `Install ${selectedTitle.sourceType === 'disc' ? 'Disc' : 'Part'} 1 of ${dlcTotalParts}` : 'Install DLC'}
+                            {notEnoughSpace ? 'No Space' : queued(pkg) ? 'Queued' : !canInstall ? disabledLabel : isDlcMultipart ? `${queueBusy ? 'Queue' : 'Install'} ${selectedTitle.sourceType === 'disc' ? 'Disc' : 'Part'} 1 of ${dlcTotalParts}` : queueBusy ? 'Queue DLC' : 'Install DLC'}
                           </button>
                         </div>
                       </div>
@@ -533,8 +543,8 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                     const requiredSpace = otherFullSize;
                     const maxAvailable = maxAvailableFor(pkg.title_id || selectedTitle.title_id);
                     const notEnoughSpace = !!storage && maxAvailable < requiredSpace;
-                    const canInstall = pkg.can_install !== false;
-                    const isInstallDisabled = !canInstall || notEnoughSpace || installerStatus.is_installing;
+                    const canInstall = queueable(pkg);
+                    const isInstallDisabled = !canInstall || notEnoughSpace;
 
                     return (
                       <div

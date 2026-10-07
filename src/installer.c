@@ -6,6 +6,7 @@
  */
 
 #include "installer.h"
+#include "install_queue.h"
 #include "install_service.h"
 #include "pkg_parser.h"
 #include "pkg_scanner.h"
@@ -51,16 +52,33 @@ static volatile int g_monitor_thread_created = 0;
 static pthread_t g_stream_thread;
 static volatile int g_stream_thread_created = 0;
 static volatile int g_cancel_stream = 0;
-/* Set when the browser releases a direct-storage install. The system install
- * continues, but this process stops polling and discards any queued update. */
-static volatile int g_detach_direct_storage = 0;
-static int g_batch_update_pending = 0;
-/* A batch handoff must live in the installer process, not in the browser.
- * The browser may be closed while the base package is being finalized. */
-static char g_pending_pkg_path[512];
+static int g_worker_busy, g_cancel_cleanup;
+static pthread_mutex_t g_start_mutex = PTHREAD_MUTEX_INITIALIZER;
+static int installer_start_internal(const char *pkg_path);
 
-static int installer_start_internal(const char *pkg_path, const char *pending_pkg_path, int is_queued_handoff);
-#define INSTALLER_HANDOFF_DISCARDED (-1000)
+static void installer_submitted(void) {
+    pthread_mutex_lock(&g_installer_mutex);
+    g_status.is_installing = 0;
+    g_status.completed = 0;
+    g_status.failed = 0;
+    g_status.progress_percent = -1;
+    g_status.is_direct_storage = 1;
+    snprintf(g_status.status_str, sizeof(g_status.status_str), "submitted");
+    snprintf(g_status.prompt_message, sizeof(g_status.prompt_message), "Submitted to PS5. Track progress and cancellation in PS5 Notifications.");
+    pthread_mutex_unlock(&g_installer_mutex);
+    install_log("[INSTALLER] Submitted to PS5 system installer");
+}
+
+/* Caller holds g_installer_mutex. */
+static void installer_complete_locked(void) {
+    g_status.downloaded_bytes = g_status.total_bytes;
+    g_status.progress_percent = 100;
+    g_status.is_installing = 0;
+    g_status.completed = 1;
+    snprintf(g_status.status_str, sizeof(g_status.status_str), "playable");
+    snprintf(g_status.prompt_message, sizeof(g_status.prompt_message), "%s is ready to play!",
+             g_status.title_name[0] ? g_status.title_name : "Package");
+}
 
 static int mkdir_recursive(const char *dir_path) {
     char tmp[512];
@@ -655,6 +673,24 @@ static void installer_on_part_changed(uint32_t current_part, uint32_t total_part
     pthread_mutex_unlock(&g_installer_mutex);
 }
 
+void installer_notify_source_error(const char *expected_path) {
+    pthread_mutex_lock(&g_installer_mutex);
+    if (expected_path && g_status.is_installing && !g_status.is_direct_storage &&
+        !strcmp(g_status.pkg_path, expected_path)) {
+        g_cancel_stream = 1;
+        g_status.is_installing = 0;
+        g_status.failed = 1;
+        g_status.error_code = -4;
+        snprintf(g_status.status_str, sizeof(g_status.status_str), "error");
+        snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
+                 "Package source stopped providing data. Reconnect the drive/share and retry.");
+        install_log("[INSTALLER] Package source read failed: %.160s", expected_path);
+    }
+    pthread_mutex_unlock(&g_installer_mutex);
+    /* The installer worker performs cleanup. Joining the stream session
+     * from one of its readers would deadlock on that reader's reference. */
+}
+
 void installer_notify_bytes_streamed(uint64_t bytes_read) {
     pthread_mutex_lock(&g_installer_mutex);
     if (g_status.is_installing) {
@@ -1011,7 +1047,6 @@ static void *stream_installer_worker(void *arg) {
             g_status.error_code = -20;
             strncpy(g_status.status_str, "error", sizeof(g_status.status_str) - 1);
             snprintf(g_status.prompt_message, sizeof(g_status.prompt_message), "Failed to read header of Part 1");
-            g_pending_pkg_path[0] = '\0';
             pthread_mutex_unlock(&g_installer_mutex);
             install_log("[INSTALLER] Failed to read header of Part 1: %s", worker_pkg_path);
             stream_debug_log_close();
@@ -1026,7 +1061,6 @@ static void *stream_installer_worker(void *arg) {
             g_status.error_code = -25;
             strncpy(g_status.status_str, "error", sizeof(g_status.status_str) - 1);
             snprintf(g_status.prompt_message, sizeof(g_status.prompt_message), "Invalid total parts count (%u)", total_parts);
-            g_pending_pkg_path[0] = '\0';
             install_log("[INSTALLER] Invalid total parts count (%u)", total_parts);
             pthread_mutex_unlock(&g_installer_mutex);
             stream_debug_log_close();
@@ -1135,7 +1169,6 @@ static void *stream_installer_worker(void *arg) {
             g_status.error_code = -23;
             strncpy(g_status.status_str, "error", sizeof(g_status.status_str) - 1);
             snprintf(g_status.prompt_message, sizeof(g_status.prompt_message), "Package file not found or cannot be opened");
-            g_pending_pkg_path[0] = '\0';
             pthread_mutex_unlock(&g_installer_mutex);
             ps5_notify("Package file not found or cannot be opened!");
             install_log("[INSTALLER] Failed to open stream for %s (file missing or inaccessible)", worker_pkg_path);
@@ -1164,22 +1197,6 @@ static void *stream_installer_worker(void *arg) {
     if (tid[0] == '\0' && hdr1.title_id[0] != '\0') {
         strncpy(tid, hdr1.title_id, sizeof(tid) - 1);
     }
-#if defined(__Prospero__) || defined(PS5_BUILD)
-    int was_already_installed = 0;
-    char initial_installed_ver[32] = {0};
-    int initial_dlc_installed = 0;
-    if (tid[0] != '\0' && strcmp(tid, "UNKNOWN") != 0) {
-        was_already_installed = app_info_check_installed(tid, initial_installed_ver, sizeof(initial_installed_ver));
-        pthread_mutex_lock(&g_installer_mutex);
-        char cid_copy[64] = {0};
-        strncpy(cid_copy, g_status.content_id, sizeof(cid_copy) - 1);
-        pthread_mutex_unlock(&g_installer_mutex);
-        if (cid_copy[0] != '\0') {
-            initial_dlc_installed = app_info_check_dlc_installed(tid, cid_copy);
-        }
-    }
-#endif
-
     if (is_filesystem_install) {
         snprintf(target_uri, sizeof(target_uri), "%s", worker_pkg_path);
         icon_uri[0] = '\0';
@@ -1207,7 +1224,6 @@ static void *stream_installer_worker(void *arg) {
 
     pthread_mutex_lock(&g_installer_mutex);
     if (g_cancel_stream || !g_monitor_running) {
-        g_pending_pkg_path[0] = '\0';
         pthread_mutex_unlock(&g_installer_mutex);
         install_log("[INSTALLER] Canceled before helper launch");
         free(extracted_icon);
@@ -1329,28 +1345,10 @@ static void *stream_installer_worker(void *arg) {
     }
     rname = installer_strerror(ret);
 
-    pthread_mutex_lock(&g_installer_mutex);
-    int detached_during_start = g_detach_direct_storage;
-    pthread_mutex_unlock(&g_installer_mutex);
-    if (detached_during_start) {
-        install_log("[INSTALLER] Detached during package submission; stopping local tracking");
-        install_service_close(&service);
-        free(extracted_icon);
-        ws_live_abort();
-        if (!is_filesystem_install) {
-            stream_server_session_stop();
-        }
-        ws_live_destroy();
-        return NULL;
-    }
-
     if (g_cancel_stream || !g_monitor_running) {
         /* Canceled or shutting down during retry waits: cancel/shutdown owns
            the status, just stop the server and exit. */
         install_log("[INSTALLER] Stopping helper after cancel/shutdown");
-        pthread_mutex_lock(&g_installer_mutex);
-        g_pending_pkg_path[0] = '\0';
-        pthread_mutex_unlock(&g_installer_mutex);
         install_service_close(&service);
         free(extracted_icon);
         ws_live_abort();
@@ -1393,17 +1391,7 @@ static void *stream_installer_worker(void *arg) {
         install_log("[INSTALLER] Direct storage helper pid=%d install returned 0x%08X (%s), content_id='%s'",
                     (int)service.pid, ret, rname ? rname : "unknown", info.content_id);
 
-        pthread_mutex_lock(&g_installer_mutex);
-        int detached_during_fallback_start = g_detach_direct_storage;
-        pthread_mutex_unlock(&g_installer_mutex);
-        if (detached_during_fallback_start) {
-            install_log("[INSTALLER] Detached during direct storage submission; stopping local tracking");
-            install_service_close(&service);
-            free(extracted_icon);
-            ws_live_abort();
-            ws_live_destroy();
-            return NULL;
-        }
+
     }
 
     if (ret != 0) {
@@ -1414,7 +1402,6 @@ static void *stream_installer_worker(void *arg) {
         strncpy(g_status.status_str, "error", sizeof(g_status.status_str) - 1);
         snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
                  "Install failed: %s (0x%08X)", rname ? rname : "unknown", (unsigned)ret);
-        g_pending_pkg_path[0] = '\0';
         pthread_mutex_unlock(&g_installer_mutex);
         install_service_close(&service);
         ps5_notify("Install error: 0x%08X (%s)", ret, rname ? rname : "unknown");
@@ -1447,19 +1434,11 @@ static void *stream_installer_worker(void *arg) {
     }
     pthread_mutex_unlock(&g_installer_mutex);
 
-    if (was_already_installed == 0 && initial_installed_ver[0] == '\0') {
-        pthread_mutex_lock(&g_installer_mutex);
-        char current_tid[32] = {0};
-        char current_cid[64] = {0};
-        strncpy(current_tid, g_status.title_id, sizeof(current_tid) - 1);
-        strncpy(current_cid, g_status.content_id, sizeof(current_cid) - 1);
-        pthread_mutex_unlock(&g_installer_mutex);
-        if (current_tid[0] != '\0' && strcmp(current_tid, "UNKNOWN") != 0) {
-            was_already_installed = app_info_check_installed(current_tid, initial_installed_ver, sizeof(initial_installed_ver));
-            if (current_cid[0] != '\0') {
-                initial_dlc_installed = app_info_check_dlc_installed(current_tid, current_cid);
-            }
-        }
+    if (is_filesystem_install) {
+        installer_submitted();
+        install_service_close(&service);
+        free(extracted_icon);
+        return NULL;
     }
 
     /* Monitor package stream delivery and console installation */
@@ -1467,13 +1446,11 @@ static void *stream_installer_worker(void *arg) {
     uint64_t last_log_bytes = 0;
     int stream_done = 0;
     time_t stream_done_time = 0;
-    time_t install_begin_time = time(NULL);
 
     for (;;) {
         int keep_going = 0;
         pthread_mutex_lock(&g_installer_mutex);
-        keep_going = (g_monitor_running && !g_cancel_stream &&
-                      !g_detach_direct_storage && g_status.is_installing);
+        keep_going = (g_monitor_running && !g_cancel_stream && g_status.is_installing);
         uint64_t down = g_status.downloaded_bytes;
         uint64_t total = g_status.total_bytes;
         int waiting_disc = g_status.waiting_for_disc;
@@ -1556,7 +1533,8 @@ static void *stream_installer_worker(void *arg) {
                             pthread_mutex_unlock(&g_installer_mutex);
                             break;
                         }
-                        continue;
+                        installer_submitted();
+                        break;
                     }
                     const char *sname = installer_strerror(sys_status.error_info.error_code);
                     install_log("[INSTALLER] System installer reported error 0x%08X (%s) (status='%s')",
@@ -1620,172 +1598,12 @@ static void *stream_installer_worker(void *arg) {
                     if (is_sys_done && stream_done) {
                         install_log("[INSTALLER] System install completed successfully (status='%s')", sys_status.status);
                         pthread_mutex_lock(&g_installer_mutex);
-                        if (g_detach_direct_storage) {
-                            pthread_mutex_unlock(&g_installer_mutex);
-                            break;
-                        }
-                        g_status.downloaded_bytes = g_status.total_bytes;
-                        g_status.progress_percent = 100.0f;
-                        int has_pending = (g_pending_pkg_path[0] != '\0' && !g_cancel_stream &&
-                                           !g_detach_direct_storage && g_monitor_running);
-                        if (has_pending) {
-                            g_status.is_installing = 1;
-                            g_status.completed = 0;
-                            strncpy(g_status.status_str, "installing", sizeof(g_status.status_str) - 1);
-                            snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-                                     "Base package installed. Starting update...");
-                        } else {
-                            g_status.is_installing = 0;
-                            g_status.completed = 1;
-                            strncpy(g_status.status_str, "playable", sizeof(g_status.status_str) - 1);
-                            snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-                                     "%s is ready to play!", g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
-                        }
+                        installer_complete_locked();
                         pthread_mutex_unlock(&g_installer_mutex);
-                        if (!has_pending) {
-                            ps5_notify("%s is ready to play!", g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
-                        } else {
-                            ps5_notify("Base installed. Starting update for %s...", g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
-                        }
+                        ps5_notify("%s is ready to play!", g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
                         break;
                     }
                 }
-            }
-        }
-
-        if (is_filesystem_install) {
-            time_t now = time(NULL);
-            double elapsed = difftime(now, install_begin_time);
-            if (elapsed < 1.0) elapsed = 1.0;
-
-            /* Direct storage install: no progress bar displayed. Keep prompt message informing the user. */
-            pthread_mutex_lock(&g_installer_mutex);
-            g_status.downloaded_bytes = 0;
-            g_status.progress_percent = -1.0f;
-            g_status.is_direct_storage = 1;
-            strncpy(g_status.status_str, "installing", sizeof(g_status.status_str) - 1);
-            snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-                     "Installing via direct storage. Track progress in the PS5 home menu. (Tip: connect to any network to see detailed real-time progress here).");
-            pthread_mutex_unlock(&g_installer_mutex);
-
-            /* Check for completion on each iteration */
-            int verified = 0;
-            int is_update = (strcasecmp(kind_copy, "update") == 0);
-            int is_dlc = (strcasecmp(kind_copy, "dlc") == 0);
-
-            if (is_update) {
-                /* Update package: NEVER trust sys_status.status alone because base is already playable!
-                 * Must verify that the installed version actually matches or exceeds expect_ver
-                 * and that at least a minimum extraction time has elapsed. */
-                if (title_id_copy[0] != '\0' && expect_ver[0] != '\0') {
-                    char installed_ver[32] = {0};
-                    if (app_info_check_installed(title_id_copy, installed_ver, sizeof(installed_ver))) {
-                        if (installed_ver[0] != '\0' &&
-                            app_info_compare_versions(installed_ver, expect_ver) >= 0) {
-                            if (elapsed >= 3 &&
-                                (initial_installed_ver[0] == '\0' ||
-                                 app_info_compare_versions(installed_ver, initial_installed_ver) > 0 ||
-                                 elapsed >= 15)) {
-                                install_log("[INSTALLER] Direct storage update verified installed: %s %s >= %s (initial=%s, elapsed=%.0fs)",
-                                            title_id_copy, installed_ver, expect_ver,
-                                            initial_installed_ver[0] ? initial_installed_ver : "none", elapsed);
-                                verified = 1;
-                            }
-                        }
-                    }
-                } else if (title_id_copy[0] != '\0' && elapsed >= 15) {
-                    /* Fallback if expect_ver could not be parsed: wait at least 15s and check installed */
-                    if (app_info_check_installed(title_id_copy, NULL, 0)) {
-                        install_log("[INSTALLER] Direct storage update completed (elapsed=%.0fs)", elapsed);
-                        verified = 1;
-                    }
-                }
-            } else if (is_dlc) {
-                /* DLC package: check if content_id is registered in app.db / addcont */
-                if (title_id_copy[0] != '\0' && content_copy[0] != '\0') {
-                    if (app_info_check_dlc_installed(title_id_copy, content_copy)) {
-                        if (!initial_dlc_installed || elapsed >= 15) {
-                            install_log("[INSTALLER] Direct storage DLC verified installed: %s / %s (elapsed=%.0fs)",
-                                        title_id_copy, content_copy, elapsed);
-                            verified = 1;
-                        }
-                    }
-                } else if (elapsed >= 15) {
-                    verified = 1;
-                }
-            } else {
-                /* Base package:
-                 * Fresh install: wait until check_package_verified_installed confirms title in app.db.
-                 * Re-install: if already installed prior to start, require at least 15s elapsed. */
-                if (!was_already_installed) {
-                    if (elapsed >= 3 &&
-                        check_package_verified_installed(title_id_copy, kind_copy, content_copy, expect_ver)) {
-                        install_log("[INSTALLER] Direct storage base package verified installed: %s (elapsed=%.0fs)",
-                                    title_id_copy, elapsed);
-                        verified = 1;
-                    }
-                } else {
-                    if (elapsed >= 15 &&
-                        check_package_verified_installed(title_id_copy, kind_copy, content_copy, expect_ver)) {
-                        install_log("[INSTALLER] Direct storage base package re-install completed: %s (elapsed=%.0fs)",
-                                    title_id_copy, elapsed);
-                        verified = 1;
-                    }
-                }
-            }
-
-            if (verified) {
-                install_log("[INSTALLER] Direct filesystem install verified completed for %s",
-                            g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
-                pthread_mutex_lock(&g_installer_mutex);
-                if (g_detach_direct_storage) {
-                    pthread_mutex_unlock(&g_installer_mutex);
-                    break;
-                }
-                g_status.downloaded_bytes = g_status.total_bytes;
-                g_status.progress_percent = 100.0f;
-                int has_pending = (g_pending_pkg_path[0] != '\0' && !g_cancel_stream &&
-                                   !g_detach_direct_storage && g_monitor_running);
-                if (has_pending) {
-                    g_status.is_installing = 1;
-                    g_status.completed = 0;
-                    strncpy(g_status.status_str, "installing", sizeof(g_status.status_str) - 1);
-                    snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-                             "Base package installed. Starting update...");
-                } else {
-                    g_status.is_installing = 0;
-                    g_status.completed = 1;
-                    strncpy(g_status.status_str, "playable", sizeof(g_status.status_str) - 1);
-                    snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-                             "%s is ready to play!", g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
-                }
-                pthread_mutex_unlock(&g_installer_mutex);
-                if (!has_pending) {
-                    ps5_notify("%s is ready to play!", g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
-                } else {
-                    ps5_notify("Base installed. Starting update for %s...", g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
-                }
-                break;
-            }
-
-            /* Timeout check for filesystem installs: generous 30 min minimum */
-            uint64_t fs_timeout = 1800;
-            if (total > 0) {
-                uint64_t est_sec = (total / (15ULL * 1024 * 1024)) + 300;
-                if (est_sec > fs_timeout) fs_timeout = est_sec;
-            }
-            if ((uint64_t)elapsed > fs_timeout) {
-                install_log("[INSTALLER] Filesystem install timed out after %lld seconds", (long long)elapsed);
-                pthread_mutex_lock(&g_installer_mutex);
-                g_status.is_installing = 0;
-                g_status.failed = 1;
-                g_status.error_code = -24;
-                strncpy(g_status.status_str, "error", sizeof(g_status.status_str) - 1);
-                snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-                         "Installation timed out during filesystem extraction");
-                pthread_mutex_unlock(&g_installer_mutex);
-                ps5_notify("Installation timed out during filesystem extraction!");
-                break;
             }
         }
 
@@ -1810,33 +1628,9 @@ static void *stream_installer_worker(void *arg) {
                 int verified = check_package_verified_installed(title_id_copy, kind_copy, content_copy, expect_ver);
                 if (verified) {
                     pthread_mutex_lock(&g_installer_mutex);
-                    if (g_detach_direct_storage) {
-                        pthread_mutex_unlock(&g_installer_mutex);
-                        break;
-                    }
-                    g_status.downloaded_bytes = g_status.total_bytes;
-                    g_status.progress_percent = 100.0f;
-                    int has_pending = (g_pending_pkg_path[0] != '\0' && !g_cancel_stream &&
-                                       !g_detach_direct_storage && g_monitor_running);
-                    if (has_pending) {
-                        g_status.is_installing = 1;
-                        g_status.completed = 0;
-                        strncpy(g_status.status_str, "installing", sizeof(g_status.status_str) - 1);
-                        snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-                                 "Base package installed. Starting update...");
-                    } else {
-                        g_status.is_installing = 0;
-                        g_status.completed = 1;
-                        strncpy(g_status.status_str, "playable", sizeof(g_status.status_str) - 1);
-                        snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-                                 "%s is ready to play!", g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
-                    }
+                    installer_complete_locked();
                     pthread_mutex_unlock(&g_installer_mutex);
-                    if (!has_pending) {
-                        ps5_notify("%s is ready to play!", g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
-                    } else {
-                        ps5_notify("Base installed. Starting update for %s...", g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
-                    }
+                    ps5_notify("%s is ready to play!", g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
                     break;
                 }
             }
@@ -1877,36 +1671,7 @@ static void *stream_installer_worker(void *arg) {
     /* Mock streaming simulation for host tests */
     if (is_filesystem_install) {
         usleep(50000);
-
-        install_log("[INSTALLER] Direct filesystem install verified completed for %s", clean_pkg_name);
-        pthread_mutex_lock(&g_installer_mutex);
-        if (g_detach_direct_storage) {
-            pthread_mutex_unlock(&g_installer_mutex);
-            goto mock_install_done;
-        }
-        g_status.downloaded_bytes = g_status.total_bytes;
-        g_status.progress_percent = 100.0f;
-        int has_pending = (g_pending_pkg_path[0] != '\0' && !g_cancel_stream &&
-                           !g_detach_direct_storage && g_monitor_running);
-        if (has_pending) {
-            g_status.is_installing = 1;
-            g_status.completed = 0;
-            strncpy(g_status.status_str, "installing", sizeof(g_status.status_str) - 1);
-            snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-                     "Base package installed. Starting update...");
-        } else {
-            g_status.is_installing = 0;
-            g_status.completed = 1;
-            strncpy(g_status.status_str, "playable", sizeof(g_status.status_str) - 1);
-            snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-                     "%s is ready to play!", g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
-        }
-        pthread_mutex_unlock(&g_installer_mutex);
-        if (!has_pending) {
-            ps5_notify("%s is ready to play!", g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
-        } else {
-            ps5_notify("Base installed. Starting update for %s...", g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
-        }
+        installer_submitted();
     } else if (getenv("PKG_TEST_SIMULATE_0x80B21121") != NULL && can_fallback_to_direct) {
         install_log("[INSTALLER] Helper pid=999 install returned 0x80B21121 (SCE_PLAYGO_ERROR_CORE_NET_NOT_CONNECTED)");
         install_log("[INSTALLER] Network not connected (0x80B21121); falling back to direct storage install for %s", worker_pkg_path);
@@ -1935,41 +1700,14 @@ static void *stream_installer_worker(void *arg) {
 
         usleep(50000);
 
-        install_log("[INSTALLER] Direct filesystem install verified completed for %s", clean_pkg_name);
-        pthread_mutex_lock(&g_installer_mutex);
-        if (g_detach_direct_storage) {
-            pthread_mutex_unlock(&g_installer_mutex);
-            goto mock_install_done;
-        }
-        g_status.downloaded_bytes = g_status.total_bytes;
-        g_status.progress_percent = 100.0f;
-        int has_pending = (g_pending_pkg_path[0] != '\0' && !g_cancel_stream &&
-                           !g_detach_direct_storage && g_monitor_running);
-        if (has_pending) {
-            g_status.is_installing = 1;
-            g_status.completed = 0;
-            strncpy(g_status.status_str, "installing", sizeof(g_status.status_str) - 1);
-            snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-                     "Base package installed. Starting update...");
-        } else {
-            g_status.is_installing = 0;
-            g_status.completed = 1;
-            strncpy(g_status.status_str, "playable", sizeof(g_status.status_str) - 1);
-            snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-                     "%s is ready to play!", g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
-        }
-        pthread_mutex_unlock(&g_installer_mutex);
-        if (!has_pending) {
-            ps5_notify("%s is ready to play!", g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
-        } else {
-            ps5_notify("Base installed. Starting update for %s...", g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
-        }
+        installer_submitted();
     } else {
         char mock_pkg_path[512];
         pthread_mutex_lock(&g_installer_mutex);
         strncpy(mock_pkg_path, g_status.pkg_path, sizeof(mock_pkg_path) - 1);
         mock_pkg_path[sizeof(mock_pkg_path) - 1] = '\0';
         pthread_mutex_unlock(&g_installer_mutex);
+        int mock_read_failed = 0;
         virtual_stream_t *vs_sim = (virtual_stream_t *)calloc(1, sizeof(virtual_stream_t));
         if (vs_sim && virtual_stream_open(mock_pkg_path, vs_sim) == 0) {
             char dummy[262144];
@@ -1985,7 +1723,8 @@ static void *stream_installer_worker(void *arg) {
                     rsize = (size_t)(vs_sim->total_pkg_size - offset);
                 }
                 ssize_t n = virtual_stream_read(vs_sim, offset, dummy, rsize);
-                if (n < 0) {
+                if (n <= 0) {
+                    mock_read_failed = 1;
                     break;
                 }
                 offset += (uint64_t)n;
@@ -2000,99 +1739,53 @@ static void *stream_installer_worker(void *arg) {
             }
             virtual_stream_close(vs_sim);
         }
+        else mock_read_failed = 1;
         if (vs_sim) free(vs_sim);
 
         pthread_mutex_lock(&g_installer_mutex);
+        if (mock_read_failed && !g_cancel_stream && g_status.is_installing) {
+            g_status.is_installing = 0;
+            g_status.failed = 1;
+            snprintf(g_status.status_str, sizeof(g_status.status_str), "error");
+            snprintf(g_status.prompt_message, sizeof(g_status.prompt_message), "Package source stopped providing data");
+        }
         if (!g_cancel_stream && !g_status.failed && g_status.is_installing) {
-            g_status.downloaded_bytes = g_status.total_bytes;
-            g_status.progress_percent = 100.0f;
-            int has_pending = (g_pending_pkg_path[0] != '\0' && !g_cancel_stream &&
-                               !g_detach_direct_storage && g_monitor_running);
-            if (has_pending) {
-                g_status.is_installing = 1;
-                g_status.completed = 0;
-                strncpy(g_status.status_str, "installing", sizeof(g_status.status_str) - 1);
-                snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-                         "Base package installed. Starting update...");
-            } else {
-                g_status.is_installing = 0;
-                g_status.completed = 1;
-                strncpy(g_status.status_str, "playable", sizeof(g_status.status_str) - 1);
-                snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-                         "%s is ready to play!", g_status.title_name[0] ? g_status.title_name : clean_pkg_name);
-            }
+            installer_complete_locked();
         }
         pthread_mutex_unlock(&g_installer_mutex);
     }
-mock_install_done:
 #endif
 
-    /* Capture a queued second package before releasing the first package's
-     * stream. The next worker must only start after the first worker has
-     * completely stopped using the stream server. */
-    char next_pkg_path[512] = {0};
-    int has_next = 0;
-    pthread_mutex_lock(&g_installer_mutex);
-    if (g_pending_pkg_path[0] != '\0' && g_monitor_running && !g_cancel_stream &&
-        !g_detach_direct_storage) {
-        strncpy(next_pkg_path, g_pending_pkg_path, sizeof(next_pkg_path) - 1);
-        next_pkg_path[sizeof(next_pkg_path) - 1] = '\0';
-        g_pending_pkg_path[0] = '\0';
-        has_next = 1;
-    } else if (g_status.failed || g_cancel_stream || !g_monitor_running || g_detach_direct_storage) {
-        g_pending_pkg_path[0] = '\0';
-    }
-    pthread_mutex_unlock(&g_installer_mutex);
-
-    installer_status_t final_status;
-    installer_get_status(&final_status);
-    install_log("[INSTALLER] Finished status=%s completed=%d failed=%d error=0x%08X downloaded=%llu served=%llu total=%llu canceled=%d shutdown=%d next=%.160s",
-                final_status.status_str, final_status.completed, final_status.failed,
-                (unsigned)final_status.error_code, (unsigned long long)final_status.downloaded_bytes,
-                (unsigned long long)final_status.stream_served_bytes,
-                (unsigned long long)final_status.total_bytes, g_cancel_stream, !g_monitor_running,
-                next_pkg_path);
-
-    /* NEW: release the live RAM session (noop for disk installs). Abort
-     * first so any reader blocked in ws_live_read wakes before/during
-     * the stop's vs_refs drain; destroy frees the ring. */
+    /* The scheduler waits for the wrapper to report idle AFTER cleanup. */
     ws_live_abort();
-    if (!is_filesystem_install) {
-        stream_server_session_stop();
-    }
+    if (!is_filesystem_install) stream_server_session_stop();
     ws_live_destroy();
-
-    if (has_next && next_pkg_path[0] != '\0') {
-        install_log("[INSTALLER] Base completed; starting queued update: %s", next_pkg_path);
-        int next_res = installer_start_internal(next_pkg_path, NULL, 1 /* is_queued_handoff */);
-        if (next_res == INSTALLER_HANDOFF_DISCARDED) {
-            install_log("[INSTALLER] Queued update skipped after direct storage tracking was closed");
-        } else if (next_res != 0) {
-            pthread_mutex_lock(&g_installer_mutex);
-            g_status.is_installing = 0;
-            g_status.failed = 1;
-            g_status.error_code = next_res;
-            strncpy(g_status.status_str, "error", sizeof(g_status.status_str) - 1);
-            snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-                     "Failed to start queued update (code %d)", next_res);
-            pthread_mutex_unlock(&g_installer_mutex);
-            install_log("[INSTALLER] Failed to start queued update (code %d)", next_res);
-            ps5_notify("Failed to start queued update");
-        }
-    }
     free(extracted_icon);
     return NULL;
+}
+
+static void *stream_worker_entry(void *arg) {
+    void *result = stream_installer_worker(arg);
+    pthread_mutex_lock(&g_installer_mutex);
+    g_worker_busy = 0;
+    pthread_mutex_unlock(&g_installer_mutex);
+    return result;
+}
+
+int installer_is_busy(void) {
+    pthread_mutex_lock(&g_installer_mutex);
+    int busy = g_worker_busy || g_cancel_cleanup || g_status.is_installing;
+    pthread_mutex_unlock(&g_installer_mutex);
+    return busy;
 }
 
 int installer_init(const char *server_url) {
     pthread_mutex_lock(&g_installer_mutex);
     memset(&g_status, 0, sizeof(g_status));
-    g_pending_pkg_path[0] = '\0';
-    g_detach_direct_storage = 0;
-    g_batch_update_pending = 0;
     strncpy(g_status.status_str, "idle", sizeof(g_status.status_str) - 1);
     g_status.last_poll_time = time(NULL);
     g_cancel_stream = 0;
+    g_worker_busy = g_cancel_cleanup = 0;
 
     (void)server_url;
     virtual_stream_set_part_finder(pkg_scanner_find_part);
@@ -2125,36 +1818,24 @@ int installer_init(const char *server_url) {
         return -1;
     }
     g_monitor_thread_created = 1;
-
+    if (install_queue_init() != 0) {
+        g_monitor_running = 0;
+        pthread_join(g_monitor_thread, NULL);
+        g_monitor_thread_created = 0;
+        return -1;
+    }
     return 0;
 }
 
-static int installer_start_internal(const char *pkg_path, const char *pending_pkg_path, int is_queued_handoff) {
+static int installer_start_internal(const char *pkg_path) {
     if (!pkg_path || pkg_path[0] == '\0') {
         return -1;
     }
 
-    char pending_path_copy[512] = {0};
-    if (pending_pkg_path && pending_pkg_path[0] != '\0') {
-        strncpy(pending_path_copy, pending_pkg_path, sizeof(pending_path_copy) - 1);
-        pending_path_copy[sizeof(pending_path_copy) - 1] = '\0';
-    }
-
-    /* Fast check under lock, then release before slow I/O (parse, statvfs,
-     * mkdir) so cancel/status keep working. Re-checked under lock later. */
     pthread_mutex_lock(&g_installer_mutex);
-    if (is_queued_handoff && g_detach_direct_storage) {
-        pthread_mutex_unlock(&g_installer_mutex);
-        return INSTALLER_HANDOFF_DISCARDED;
-    }
     int already = g_status.is_installing;
-    if (!already) {
-        /* A normal single install also clears a stale batch left by a
-         * failed/canceled worker. A batch commit below replaces it. */
-        g_pending_pkg_path[0] = '\0';
-    }
     pthread_mutex_unlock(&g_installer_mutex);
-    if (already && !is_queued_handoff) {
+    if (already) {
         return -2; /* Already installing */
     }
 
@@ -2166,11 +1847,7 @@ static int installer_start_internal(const char *pkg_path, const char *pending_pk
     if (g_stream_thread_created) {
         old_thr = g_stream_thread;
         g_stream_thread_created = 0;
-        /* The queued handoff is launched by the finishing worker itself.
-         * Joining that worker here would deadlock. It is already past the
-         * stream cleanup and will return after this function starts the next
-         * worker. */
-        have_old = !pthread_equal(pthread_self(), old_thr);
+        have_old = 1;
     }
     pthread_mutex_unlock(&g_installer_mutex);
     if (have_old) {
@@ -2186,14 +1863,6 @@ static int installer_start_internal(const char *pkg_path, const char *pending_pk
         install_log("[INSTALLER] Package file does not exist or cannot be opened: %s", pkg_path_copy);
         ps5_notify("Package file not found!");
         return -4; /* File not found */
-    }
-
-    if (pending_path_copy[0] != '\0') {
-        if (virtual_stream_check_path(pending_path_copy) != 0) {
-            install_log("[INSTALLER] Update package file does not exist or cannot be opened: %s", pending_path_copy);
-            ps5_notify("Update package file not found!");
-            return -4;
-        }
     }
 
     pkg_detail_t detail;
@@ -2249,23 +1918,11 @@ static int installer_start_internal(const char *pkg_path, const char *pending_pk
 
     /* Commit under lock; re-check is_installing in case of a race. */
     pthread_mutex_lock(&g_installer_mutex);
-    if (is_queued_handoff && g_detach_direct_storage) {
-        pthread_mutex_unlock(&g_installer_mutex);
-        return INSTALLER_HANDOFF_DISCARDED;
-    }
-    if (g_status.is_installing && !is_queued_handoff) {
+    if (g_status.is_installing) {
         pthread_mutex_unlock(&g_installer_mutex);
         return -2;
     }
-    g_detach_direct_storage = 0;
-    g_batch_update_pending = pending_path_copy[0] != '\0';
     memset(&g_status, 0, sizeof(g_status));
-    if (pending_path_copy[0] != '\0') {
-        strncpy(g_pending_pkg_path, pending_path_copy, sizeof(g_pending_pkg_path) - 1);
-        g_pending_pkg_path[sizeof(g_pending_pkg_path) - 1] = '\0';
-    } else {
-        g_pending_pkg_path[0] = '\0';
-    }
     g_status.is_installing = 1;
     g_status.is_multipart = detail.is_multipart;
     g_status.total_parts = detail.total_parts;
@@ -2324,7 +1981,9 @@ static int installer_start_internal(const char *pkg_path, const char *pending_pk
        (Previous worker already joined above, without holding the lock.) */
 
     /* Launch background stream installer pipeline */
-    if (pthread_create(&g_stream_thread, NULL, stream_installer_worker, NULL) != 0) {
+    g_worker_busy = 1;
+    if (pthread_create(&g_stream_thread, NULL, stream_worker_entry, NULL) != 0) {
+        g_worker_busy = 0;
         g_status.is_installing = 0;
         g_status.failed = 1;
         pthread_mutex_unlock(&g_installer_mutex);
@@ -2351,7 +2010,10 @@ static int installer_start_internal(const char *pkg_path, const char *pending_pk
 }
 
 int installer_start(const char *pkg_path) {
-    return installer_start_internal(pkg_path, NULL, 0);
+    pthread_mutex_lock(&g_start_mutex);
+    int rc = installer_start_internal(pkg_path);
+    pthread_mutex_unlock(&g_start_mutex);
+    return rc;
 }
 
 int installer_start_batch(const char *base_pkg_path, const char *update_pkg_path) {
@@ -2359,7 +2021,7 @@ int installer_start_batch(const char *base_pkg_path, const char *update_pkg_path
         !update_pkg_path || update_pkg_path[0] == '\0') {
         return -1;
     }
-    return installer_start_internal(base_pkg_path, update_pkg_path, 0);
+    return install_queue_add_paths(base_pkg_path, update_pkg_path);
 }
 
 /* NEW: start an install from a live RAM session ("live:<id>", Direct
@@ -2369,7 +2031,7 @@ int installer_start_batch(const char *base_pkg_path, const char *update_pkg_path
  * refused (live pushes are single packages). The existing background
  * worker runs unchanged: "live:<id>" flows through to
  * stream_server_session_start -> virtual_stream_open's live: scheme. */
-int installer_start_live(const char *live_uri) {
+static int installer_start_live_internal(const char *live_uri) {
     if (!live_uri || strncmp(live_uri, "live:", 5) != 0) {
         return -1;
     }
@@ -2472,8 +2134,6 @@ int installer_start_live(const char *live_uri) {
         pthread_mutex_unlock(&g_installer_mutex);
         return -2;
     }
-    g_detach_direct_storage = 0;
-    g_batch_update_pending = 0;
     memset(&g_status, 0, sizeof(g_status));
     g_status.is_installing = 1;
     g_status.is_multipart = 0;
@@ -2503,7 +2163,9 @@ int installer_start_live(const char *live_uri) {
     g_status.last_poll_time = time(NULL);
     g_cancel_stream = 0;
 
-    if (pthread_create(&g_stream_thread, NULL, stream_installer_worker, NULL) != 0) {
+    g_worker_busy = 1;
+    if (pthread_create(&g_stream_thread, NULL, stream_worker_entry, NULL) != 0) {
+        g_worker_busy = 0;
         g_status.is_installing = 0;
         g_status.failed = 1;
         pthread_mutex_unlock(&g_installer_mutex);
@@ -2519,9 +2181,23 @@ int installer_start_live(const char *live_uri) {
     return 0;
 }
 
-int installer_cancel(void) {
+int installer_start_live(const char *live_uri) {
+    pthread_mutex_lock(&g_start_mutex);
     pthread_mutex_lock(&g_installer_mutex);
-    if (!g_status.is_installing) {
+    int busy = g_worker_busy || g_cancel_cleanup || g_status.is_installing;
+    int reap = !busy && g_stream_thread_created;
+    pthread_t previous = g_stream_thread;
+    if (reap) g_stream_thread_created = 0;
+    pthread_mutex_unlock(&g_installer_mutex);
+    if (reap) pthread_join(previous, NULL);
+    int rc = busy ? -2 : installer_start_live_internal(live_uri);
+    pthread_mutex_unlock(&g_start_mutex);
+    return rc;
+}
+
+int installer_cancel_path(const char *expected_path) {
+    pthread_mutex_lock(&g_installer_mutex);
+    if (!g_status.is_installing || (expected_path && strcmp(g_status.pkg_path, expected_path))) {
         pthread_mutex_unlock(&g_installer_mutex);
         return -1;
     }
@@ -2532,7 +2208,7 @@ int installer_cancel(void) {
     }
     install_log("[INSTALLER] Cancel requested");
     g_cancel_stream = 1;
-    g_pending_pkg_path[0] = '\0';
+    g_cancel_cleanup = 1;
     g_status.is_installing = 0;
     g_status.failed = 1;
     strncpy(g_status.status_str, "canceled", sizeof(g_status.status_str) - 1);
@@ -2542,40 +2218,20 @@ int installer_cancel(void) {
     ws_live_abort();
     stream_server_session_stop_keep_log();
     ws_live_destroy();
+    pthread_mutex_lock(&g_installer_mutex);
+    g_cancel_cleanup = 0;
+    pthread_mutex_unlock(&g_installer_mutex);
     ps5_notify("Installation canceled");
     return 0;
 }
 
+int installer_cancel(void) {
+    return installer_cancel_path(NULL);
+}
+
 int installer_detach_direct_storage(int *out_update_skipped) {
     if (out_update_skipped) *out_update_skipped = 0;
-
-    pthread_mutex_lock(&g_installer_mutex);
-    if (!g_status.is_installing) {
-        pthread_mutex_unlock(&g_installer_mutex);
-        return -1;
-    }
-    if (!g_status.is_direct_storage) {
-        pthread_mutex_unlock(&g_installer_mutex);
-        return -2;
-    }
-
-    int update_skipped = g_batch_update_pending;
-    g_detach_direct_storage = 1;
-    g_batch_update_pending = 0;
-    g_pending_pkg_path[0] = '\0';
-    g_status.is_installing = 0;
-    g_status.completed = 0;
-    g_status.failed = 0;
-    g_status.waiting_for_disc = 0;
-    g_status.error_code = 0;
-    strncpy(g_status.status_str, "background", sizeof(g_status.status_str) - 1);
-    snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-             "PKG Manager stopped tracking. The PS5 installation will continue.");
-    pthread_mutex_unlock(&g_installer_mutex);
-
-    if (out_update_skipped) *out_update_skipped = update_skipped;
-    install_log("[INSTALLER] Detached from direct storage install; queued update %s",
-                update_skipped ? "discarded" : "not present");
+    /* Hiding a panel never changes installation or queue ownership. */
     return 0;
 }
 
@@ -2699,10 +2355,10 @@ char *installer_status_to_json(void) {
 }
 
 void installer_shutdown(void) {
+    install_queue_shutdown();
     g_cancel_stream = 1;
     g_monitor_running = 0;
     pthread_mutex_lock(&g_installer_mutex);
-    g_pending_pkg_path[0] = '\0';
     pthread_mutex_unlock(&g_installer_mutex);
     /* NEW: unblock any live readers so the worker join below can't wedge. */
     ws_live_abort();

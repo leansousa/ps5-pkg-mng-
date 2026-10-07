@@ -892,6 +892,7 @@ static serve_verdict_t serve_one_request(int conn, int conn_id, const char *peer
         }
         if (n <= 0) {
             end_reason = "read-short";
+            if (!vp->is_live && g_ss.running) installer_notify_source_error(vp->parts[0].path);
             break;
         }
         if (send_all(conn, sbuf, (size_t)n) != 0) {

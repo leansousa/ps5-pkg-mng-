@@ -177,7 +177,6 @@ export function useHistoryNavigation(props) {
     setShowSmbPage,
     showDirectInstall,
     setShowDirectInstall,
-    directTransferActive,
     drives,
     fetchPackagesForDrive,
     fetchDrives,
@@ -191,8 +190,6 @@ export function useHistoryNavigation(props) {
     setSearchQuery,
     triggerQuickScan,
     installerStatus,
-    isBatchActive,
-    directInstallScreenDismissed,
     showDonateModal,
     handleCloseDonateModal,
     showClearCacheModal,
@@ -201,6 +198,8 @@ export function useHistoryNavigation(props) {
     setShowSmbModal,
     selectedLeftoverToDelete,
     setSelectedLeftoverToDelete,
+    showInstallQueue,
+    setShowInstallQueue,
     showToast,
     initialRoute,
   } = props;
@@ -252,32 +251,15 @@ export function useHistoryNavigation(props) {
   }, [showSmbPage]);
 
   const showDirectInstallRef = useRef(showDirectInstall);
-  const directTransferActiveRef = useRef(directTransferActive);
-  directTransferActiveRef.current = directTransferActive;
   showDirectInstallRef.current = showDirectInstall;
   useEffect(() => {
     showDirectInstallRef.current = showDirectInstall;
   }, [showDirectInstall]);
 
-  const isInstallingRef = useRef(false);
-  const activeDirectInstallScreenDismissed = Boolean(
-    (installerStatus?.is_direct_storage || installerStatus?.progress < 0) && directInstallScreenDismissed
-  );
-  isInstallingRef.current = !activeDirectInstallScreenDismissed && Boolean(
-    installerStatus?.is_installing ||
-    installerStatus?.waiting_for_disc ||
-    isBatchActive
-  );
-  useEffect(() => {
-    isInstallingRef.current = !activeDirectInstallScreenDismissed && Boolean(
-      installerStatus?.is_installing ||
-      installerStatus?.waiting_for_disc ||
-      isBatchActive
-    );
-  }, [installerStatus?.is_installing, installerStatus?.waiting_for_disc, isBatchActive, activeDirectInstallScreenDismissed]);
-
   const modalStateRef = useRef({});
   modalStateRef.current = {
+    showInstallQueue,
+    setShowInstallQueue,
     showDonateModal,
     handleCloseDonateModal,
     showClearCacheModal,
@@ -289,6 +271,8 @@ export function useHistoryNavigation(props) {
   };
   useEffect(() => {
     modalStateRef.current = {
+      showInstallQueue,
+      setShowInstallQueue,
       showDonateModal,
       handleCloseDonateModal,
       showClearCacheModal,
@@ -299,6 +283,8 @@ export function useHistoryNavigation(props) {
       setSelectedLeftoverToDelete,
     };
   }, [
+    showInstallQueue,
+    setShowInstallQueue,
     showDonateModal,
     handleCloseDonateModal,
     showClearCacheModal,
@@ -395,32 +381,17 @@ export function useHistoryNavigation(props) {
   // Listen to popstate (triggered by controller Circle button or browser back/forward)
   useEffect(() => {
     const handlePopState = () => {
-      if (showDirectInstallRef.current && directTransferActiveRef.current) {
-        if (!window.confirm('A direct installation is in progress. Leave this page?')) {
-          writeHistory({ type: 'direct-install' }, false);
-          return;
-        }
-      }
-      // 1. If install/stream task is in progress, close the PS5 browser on Circle press
-      if (isInstallingRef.current && !directTransferActiveRef.current) {
-        try {
-          window.close();
-        } catch (e) {}
-        try {
-          window.history.back();
-        } catch (e) {}
-        return;
-      }
-
       // 2. Close modal if any modal dialog is currently open
       const m = modalStateRef.current;
       const anyModal = Boolean(
+        m.showInstallQueue ||
         m.showDonateModal ||
         m.showClearCacheModal ||
         m.showSmbModal ||
         m.selectedLeftoverToDelete
       );
       if (anyModal) {
+        if (m.showInstallQueue && m.setShowInstallQueue) m.setShowInstallQueue(false);
         if (m.showDonateModal && m.handleCloseDonateModal) m.handleCloseDonateModal();
         if (m.showClearCacheModal && m.setShowClearCacheModal) m.setShowClearCacheModal(false);
         if (m.showSmbModal && m.setShowSmbModal) m.setShowSmbModal(false);
@@ -691,10 +662,6 @@ export function useHistoryNavigation(props) {
   }, [setShowDirectInstall, setShowSettings, setShowSmbPage]);
 
   const handleCloseDirectInstall = useCallback(() => {
-    if (directTransferActiveRef.current &&
-        !window.confirm('A direct installation is in progress. Leave this page?')) {
-      return;
-    }
     setShowDirectInstall(false);
     setShowSettings(false);
     setShowSmbPage(false);
