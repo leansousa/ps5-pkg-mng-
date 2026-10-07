@@ -16,10 +16,11 @@ async function component(path) {
   });
   return (await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`)).default;
 }
-const [Header, Panel, Detail, Direct] = await Promise.all([
+const [Header, Panel, Detail, Direct, QueueView] = await Promise.all([
   component('../src/components/layout/Header.jsx'), component('../src/components/layout/InstallQueuePanel.jsx'),
   component('../src/components/views/TitleDetailView.jsx'),
   component('../src/components/views/DirectInstallView.jsx'),
+  component('../src/components/views/InstallQueueView.jsx'),
 ]);
 const job = (id, state, extras = {}) => ({ id, state, order: id, path: `/game/${id}.pkg`, kind: 'base',
   title_name: `Package ${id}`, title_id: 'PPSA00001', total_bytes: 100, downloaded_bytes: 0, progress: 0, ...extras });
@@ -196,4 +197,50 @@ test('a browser update or DLC requires an installed/queued base or an eligible b
   assert.equal(canQueueBrowserFile(update, [job(1, 'queued')], 'browser'), true);
   base.eligibility = { can_install: false, install_disabled_reason: 'Leftovers detected on console' };
   assert.equal(canQueueBrowserFile(update, [], 'browser', [update, base]), false);
+});
+
+test('InstallQueueView implements Option A layout with active install hero and total queue progress underneath', () => {
+  const jobs = [
+    job(1, 'installing', { downloaded_bytes: 40, total_bytes: 100, progress: 40, run_id: 1 }),
+    job(2, 'queued', { total_bytes: 100, run_id: 1 }),
+  ];
+  const q = { ...queue(jobs), installSpeed: 10 * 1024 * 1024 };
+  const html = render(QueueView, { queue: q, onBack() {} });
+  // Option A structure:
+  // Back button and breadcrumbs
+  assert.match(html, /Back<\/span>/);
+  assert.match(html, /PKG Manager/);
+  assert.match(html, /Install Queue/);
+  // Active Hero section (left column)
+  assert.match(html, /Package 1/);
+  assert.match(html, /Current item progress/);
+  assert.match(html, /40\.0% · 40 B \/ 100 B/);
+  // Total queue progress bar directly underneath current item progress bar (when >1 jobs)
+  assert.match(html, /Total queue progress/);
+  assert.match(html, /Overall queue progress/);
+  // Queue list items (right column)
+  assert.match(html, /Queue Items/);
+  assert.match(html, /Package 2/);
+  // Cancel and remove actions
+  assert.match(html, /Cancel install/);
+  assert.match(html, /Remove from queue/);
+});
+
+test('InstallQueueView renders empty standby state when queue has no jobs', () => {
+  const html = render(QueueView, { queue: queue([]), onBack() {} });
+  assert.match(html, /Install Queue is Empty/);
+  assert.match(html, /Browse Packages/);
+});
+
+test('InstallQueueView with a single job only renders current item progress without duplicate total queue bar', () => {
+  const jobs = [job(1, 'installing', { downloaded_bytes: 50, total_bytes: 100, progress: 50, run_id: 1 })];
+  const html = render(QueueView, { queue: queue(jobs), onBack() {} });
+  assert.match(html, /Current item progress/);
+  assert.doesNotMatch(html, /Total queue progress/);
+});
+
+test('InstallQueueView shows Clear finished entries button when completed/aborted jobs exist', () => {
+  const jobs = [job(1, 'completed'), job(2, 'aborted', { error: 'Installed version is same or newer' })];
+  const html = render(QueueView, { queue: queue(jobs), onBack() {} });
+  assert.match(html, /Clear finished entries/);
 });

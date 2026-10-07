@@ -27,7 +27,7 @@ import { useHistoryNavigation, getRouteFromHash, resolveDrive } from './hooks/us
 import { useModalInert } from './hooks/useModalInert';
 import { useDirectUpload } from './hooks/useDirectUpload';
 import { useInstallQueue } from './hooks/useInstallQueue';
-import InstallQueuePanel from './components/layout/InstallQueuePanel';
+import InstallQueueView from './components/views/InstallQueueView';
 import { collectDroppedPkgFiles } from './utils/collectPkgFiles';
 
 import OfflineScreen from './components/screens/OfflineScreen';
@@ -90,7 +90,7 @@ export default function App() {
   const [selectedTitleId, setSelectedTitleId] = useState(null);
   const [showDirectInstall, setShowDirectInstall] = useState(false);
   const directUpload = useDirectUpload();
-  const [showInstallQueue, setShowInstallQueue] = useState(false);
+  const [showQueue, setShowQueue] = useState(false);
   const directTransferActive = directUpload.state === 'uploading' || directUpload.installing;
 
   const selectedDriveRef = useRef(selectedDrive);
@@ -550,6 +550,8 @@ export default function App() {
     handleCloseSmb,
     handleOpenDirectInstall,
     handleCloseDirectInstall,
+    handleOpenQueue,
+    handleCloseQueue,
   } = useHistoryNavigation({
     setSelectedDrive,
     selectedDriveRef,
@@ -580,8 +582,8 @@ export default function App() {
     setShowSmbModal,
     selectedLeftoverToDelete,
     setSelectedLeftoverToDelete,
-    showInstallQueue,
-    setShowInstallQueue,
+    showQueue,
+    setShowQueue,
     showToast,
     initialRoute: selectedDrive ? { type: 'drive', driveId: selectedDrive.id || '__all__' } : { type: 'drives' },
   });
@@ -622,7 +624,6 @@ export default function App() {
   }, [installQueue.addFiles, openDirectInstall]);
 
   const isAnyModalOpen = Boolean(
-    showInstallQueue ||
     showDonateModal ||
     showClearCacheModal ||
     showSmbModal ||
@@ -790,14 +791,24 @@ export default function App() {
         <Header
         appVersion={appVersion}
         queueOverview={installQueue.overview}
-        queueOpen={showInstallQueue}
-        onQueueClick={() => setShowInstallQueue((open) => !open)}
+        queueOpen={showQueue}
+        onQueueClick={() => {
+          if (showQueue) {
+            handleCloseQueue();
+            return;
+          }
+          handleOpenQueue();
+        }}
         storage={storage}
         showSettings={showSettings}
         showSmbPage={showSmbPage}
         onSettingsClick={() => {
           if (showDirectInstall) {
             setShowDirectInstall(false);
+          }
+          if (showQueue) {
+            handleCloseQueue();
+            return;
           }
           if (showSmbPage) {
             handleCloseSmb();
@@ -817,11 +828,17 @@ export default function App() {
 
       {/* Main Container */}
       <main className="w-full px-4 py-4 flex-1 space-y-6">
-        {showDirectInstall ? (
+        {showQueue ? (
+          <InstallQueueView
+            queue={installQueue}
+            onBack={handleCloseQueue}
+            debugEnabled={Boolean(settings.pkg_install_debug)}
+          />
+        ) : showDirectInstall ? (
           <DirectInstallView
             onBack={handleCloseDirectInstall}
             queue={installQueue}
-            onOpenQueue={() => setShowInstallQueue(true)}
+            onOpenQueue={handleOpenQueue}
           />
         ) : showSmbPage ? (
           <SmbManagementView
@@ -937,7 +954,6 @@ export default function App() {
 
       <Footer appVersion={appVersion} />
       </fieldset>
-      {showInstallQueue && <InstallQueuePanel queue={installQueue} debugEnabled={Boolean(settings.pkg_install_debug)} onClose={() => setShowInstallQueue(false)} />}
 
       <DonateModal
         show={showDonateModal}

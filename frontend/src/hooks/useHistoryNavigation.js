@@ -88,6 +88,7 @@ export function resolveDrive(driveId, drives = []) {
 export function getRouteFromHash(hash) {
   const clean = (hash || '').replace(/^#\/?/, '').trim();
   if (!clean) return { type: 'drives' };
+  if (clean === 'queue') return { type: 'queue' };
   if (clean === 'settings') return { type: 'settings' };
   if (clean === 'smb') return { type: 'smb' };
   if (clean === 'direct-install') return { type: 'direct-install' };
@@ -104,6 +105,7 @@ export function getRouteFromHash(hash) {
 
 export function formatHash(route) {
   if (!route || route.type === 'drives') return '#/';
+  if (route.type === 'queue') return '#/queue';
   if (route.type === 'settings') return '#/settings';
   if (route.type === 'smb') return '#/smb';
   if (route.type === 'direct-install') return '#/direct-install';
@@ -140,6 +142,12 @@ export function getHistoryChain(route) {
     return [
       { type: 'drives' },
       { type: 'drive', driveId: route.driveId || '__all__' },
+      route
+    ];
+  }
+  if (route.type === 'queue') {
+    return [
+      { type: 'drives' },
       route
     ];
   }
@@ -219,11 +227,16 @@ export function useHistoryNavigation(props) {
     setShowSmbModal,
     selectedLeftoverToDelete,
     setSelectedLeftoverToDelete,
+    showQueue,
+    setShowQueue,
     showInstallQueue,
     setShowInstallQueue,
     showToast,
     initialRoute,
   } = props;
+
+  const queueShown = showQueue !== undefined ? showQueue : showInstallQueue;
+  const setQueueShown = setShowQueue || setShowInstallQueue;
 
   const currentRouteRef = useRef({ type: 'drives' });
   const initialRouteRef = useRef(initialRoute || { type: 'drives' });
@@ -259,6 +272,12 @@ export function useHistoryNavigation(props) {
     }
   }, [drives, setSelectedDrive, selectedDriveRef]);
 
+  const showQueueRef = useRef(queueShown);
+  showQueueRef.current = queueShown;
+  useEffect(() => {
+    showQueueRef.current = queueShown;
+  }, [queueShown]);
+
   const showSettingsRef = useRef(showSettings);
   showSettingsRef.current = showSettings;
   useEffect(() => {
@@ -279,8 +298,6 @@ export function useHistoryNavigation(props) {
 
   const modalStateRef = useRef({});
   modalStateRef.current = {
-    showInstallQueue,
-    setShowInstallQueue,
     showDonateModal,
     handleCloseDonateModal,
     showClearCacheModal,
@@ -292,8 +309,6 @@ export function useHistoryNavigation(props) {
   };
   useEffect(() => {
     modalStateRef.current = {
-      showInstallQueue,
-      setShowInstallQueue,
       showDonateModal,
       handleCloseDonateModal,
       showClearCacheModal,
@@ -304,8 +319,6 @@ export function useHistoryNavigation(props) {
       setSelectedLeftoverToDelete,
     };
   }, [
-    showInstallQueue,
-    setShowInstallQueue,
     showDonateModal,
     handleCloseDonateModal,
     showClearCacheModal,
@@ -317,6 +330,7 @@ export function useHistoryNavigation(props) {
   ]);
 
   const getActiveViewType = useCallback(() => {
+    if (showQueueRef.current) return 'queue';
     if (showDirectInstallRef.current) return 'direct-install';
     if (showSmbPageRef.current) return 'smb';
     if (showSettingsRef.current) return 'settings';
@@ -354,6 +368,7 @@ export function useHistoryNavigation(props) {
       setShowSettings(false);
       setShowSmbPage(false);
       setShowDirectInstall(false);
+      if (setQueueShown) setQueueShown(false);
       setSelectedDrive(drive);
       selectedDriveRef.current = drive;
       if (fetchPackagesForDrive) fetchPackagesForDrive(drive);
@@ -361,23 +376,32 @@ export function useHistoryNavigation(props) {
         setSelectedTitleId(route.titleId);
         selectedTitleIdRef.current = route.titleId;
       }
+    } else if (route.type === 'queue') {
+      setShowSettings(false);
+      setShowSmbPage(false);
+      setShowDirectInstall(false);
+      if (setQueueShown) setQueueShown(true);
     } else if (route.type === 'settings') {
       setShowSettings(true);
       setShowSmbPage(false);
       setShowDirectInstall(false);
+      if (setQueueShown) setQueueShown(false);
       if (fetchCacheStats) fetchCacheStats();
     } else if (route.type === 'smb') {
       setShowSettings(false);
       setShowSmbPage(true);
       setShowDirectInstall(false);
+      if (setQueueShown) setQueueShown(false);
     } else if (route.type === 'direct-install') {
       setShowSettings(false);
       setShowSmbPage(false);
       setShowDirectInstall(true);
+      if (setQueueShown) setQueueShown(false);
     } else {
       setShowSettings(false);
       setShowSmbPage(false);
       setShowDirectInstall(false);
+      if (setQueueShown) setQueueShown(false);
       setSelectedDrive(null);
       selectedDriveRef.current = null;
       setSelectedTitleId(null);
@@ -397,6 +421,7 @@ export function useHistoryNavigation(props) {
     setShowDirectInstall,
     setShowSettings,
     setShowSmbPage,
+    setQueueShown,
   ]);
 
   // Listen to popstate (triggered by controller Circle button or browser back/forward)
@@ -404,13 +429,6 @@ export function useHistoryNavigation(props) {
     const handlePopState = () => {
       // 2. Close modal if any modal dialog is currently open
       const m = modalStateRef.current;
-      if (m.showInstallQueue) {
-        if (m.setShowInstallQueue) m.setShowInstallQueue(false);
-        // Re-push current route so we remain on the current page in history
-        writeHistory(currentRouteRef.current, false);
-        return;
-      }
-
       const anyModal = Boolean(
         m.showDonateModal ||
         m.showClearCacheModal ||
@@ -453,29 +471,39 @@ export function useHistoryNavigation(props) {
       // 4. Normal view transition from popped history
       currentRouteRef.current = target;
 
-      if (target.type === 'smb') {
+      if (target.type === 'queue') {
+        setShowSmbPage(false);
+        setShowSettings(false);
+        setShowDirectInstall(false);
+        if (setQueueShown) setQueueShown(true);
+      } else if (target.type === 'smb') {
         setShowSettings(false);
         setShowSmbPage(true);
         setShowDirectInstall(false);
+        if (setQueueShown) setQueueShown(false);
       } else if (target.type === 'direct-install') {
         setShowSmbPage(false);
         setShowSettings(false);
         setShowDirectInstall(true);
+        if (setQueueShown) setQueueShown(false);
       } else if (target.type === 'settings') {
         setShowSmbPage(false);
         setShowSettings(true);
         setShowDirectInstall(false);
+        if (setQueueShown) setQueueShown(false);
         if (fetchCacheStats) fetchCacheStats();
       } else if (target.type === 'title') {
         setShowSettings(false);
         setShowSmbPage(false);
         setShowDirectInstall(false);
+        if (setQueueShown) setQueueShown(false);
         setSelectedTitleId(target.titleId);
         selectedTitleIdRef.current = target.titleId;
       } else if (target.type === 'drive') {
         setShowSettings(false);
         setShowSmbPage(false);
         setShowDirectInstall(false);
+        if (setQueueShown) setQueueShown(false);
         if (selectedTitleIdRef.current) {
           const currentY = window.scrollY || window.pageYOffset || document.documentElement.scrollTop;
           detailScrollPositionRef.current = currentY;
@@ -494,6 +522,7 @@ export function useHistoryNavigation(props) {
         setShowSettings(false);
         setShowSmbPage(false);
         setShowDirectInstall(false);
+        if (setQueueShown) setQueueShown(false);
         setSelectedTitleId(null);
         selectedTitleIdRef.current = null;
         setSelectedDrive(null);
@@ -636,10 +665,11 @@ export function useHistoryNavigation(props) {
   const handleOpenSettings = useCallback(() => {
     if (fetchCacheStats) fetchCacheStats();
     setShowSettings(true);
+    if (setQueueShown) setQueueShown(false);
     const route = { type: 'settings' };
     currentRouteRef.current = route;
     writeHistory(route, false);
-  }, [fetchCacheStats, setShowSettings]);
+  }, [fetchCacheStats, setShowSettings, setQueueShown]);
 
   const handleCloseSettings = useCallback(() => {
     if (window.history && showSettingsRef.current) {
@@ -647,6 +677,7 @@ export function useHistoryNavigation(props) {
     } else {
       setShowSettings(false);
       setShowSmbPage(false);
+      if (setQueueShown) setQueueShown(false);
       let prevRoute = { type: 'drives' };
       if (selectedTitleIdRef.current) {
         prevRoute = { type: 'title', titleId: selectedTitleIdRef.current, driveId: selectedDriveRef.current?.id || '__all__' };
@@ -656,14 +687,15 @@ export function useHistoryNavigation(props) {
       currentRouteRef.current = prevRoute;
       writeHistory(prevRoute, true);
     }
-  }, [selectedDriveRef, selectedTitleIdRef, setShowSettings, setShowSmbPage]);
+  }, [selectedDriveRef, selectedTitleIdRef, setShowSettings, setShowSmbPage, setQueueShown]);
 
   const handleOpenSmb = useCallback(() => {
     setShowSmbPage(true);
+    if (setQueueShown) setQueueShown(false);
     const route = { type: 'smb' };
     currentRouteRef.current = route;
     writeHistory(route, false);
-  }, [setShowSmbPage]);
+  }, [setShowSmbPage, setQueueShown]);
 
   const handleCloseSmb = useCallback(() => {
     if (window.history && showSmbPageRef.current) {
@@ -671,26 +703,29 @@ export function useHistoryNavigation(props) {
     } else {
       setShowSmbPage(false);
       setShowSettings(true);
+      if (setQueueShown) setQueueShown(false);
       const route = { type: 'settings' };
       currentRouteRef.current = route;
       writeHistory(route, true);
     }
-  }, [setShowSettings, setShowSmbPage]);
+  }, [setShowSettings, setShowSmbPage, setQueueShown]);
 
   const handleOpenDirectInstall = useCallback(() => {
     setShowSmbPage(false);
     setShowSettings(false);
+    if (setQueueShown) setQueueShown(false);
     setShowDirectInstall(true);
     window.scrollTo(0, 0);
     const route = { type: 'direct-install' };
     currentRouteRef.current = route;
     writeHistory(route, false);
-  }, [setShowDirectInstall, setShowSettings, setShowSmbPage]);
+  }, [setShowDirectInstall, setShowSettings, setShowSmbPage, setQueueShown]);
 
   const handleCloseDirectInstall = useCallback(() => {
     setShowDirectInstall(false);
     setShowSettings(false);
     setShowSmbPage(false);
+    if (setQueueShown) setQueueShown(false);
     setSelectedDrive(null);
     selectedDriveRef.current = null;
     setSelectedTitleId(null);
@@ -719,8 +754,36 @@ export function useHistoryNavigation(props) {
     setShowDirectInstall,
     setShowSettings,
     setShowSmbPage,
+    setQueueShown,
     shouldRestoreDetailScrollRef,
   ]);
+
+  const handleOpenQueue = useCallback(() => {
+    setShowSmbPage(false);
+    setShowSettings(false);
+    setShowDirectInstall(false);
+    if (setQueueShown) setQueueShown(true);
+    window.scrollTo(0, 0);
+    const route = { type: 'queue' };
+    currentRouteRef.current = route;
+    writeHistory(route, false);
+  }, [setShowDirectInstall, setShowSettings, setShowSmbPage, setQueueShown]);
+
+  const handleCloseQueue = useCallback(() => {
+    if (window.history && showQueueRef.current) {
+      window.history.back();
+    } else {
+      if (setQueueShown) setQueueShown(false);
+      let prevRoute = { type: 'drives' };
+      if (selectedTitleIdRef.current) {
+        prevRoute = { type: 'title', titleId: selectedTitleIdRef.current, driveId: selectedDriveRef.current?.id || '__all__' };
+      } else if (selectedDriveRef.current) {
+        prevRoute = { type: 'drive', driveId: selectedDriveRef.current.id || '__all__' };
+      }
+      currentRouteRef.current = prevRoute;
+      writeHistory(prevRoute, true);
+    }
+  }, [selectedDriveRef, selectedTitleIdRef, setQueueShown]);
 
   return {
     handleSelectDrive,
@@ -733,5 +796,7 @@ export function useHistoryNavigation(props) {
     handleCloseSmb,
     handleOpenDirectInstall,
     handleCloseDirectInstall,
+    handleOpenQueue,
+    handleCloseQueue,
   };
 }

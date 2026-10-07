@@ -3,6 +3,8 @@ import test from 'node:test';
 import {
   getRouteFromHash,
   formatHash,
+  getHistoryChain,
+  writeHistory,
   resolveDrive,
   getSmbShareFromStorage,
 } from '../src/hooks/useHistoryNavigation.js';
@@ -12,6 +14,7 @@ import { getSourceInfo } from '../src/utils/sourceInfo.js';
 test('getRouteFromHash parses drive and title hashes correctly', () => {
   assert.deepEqual(getRouteFromHash(''), { type: 'drives' });
   assert.deepEqual(getRouteFromHash('#/'), { type: 'drives' });
+  assert.deepEqual(getRouteFromHash('#/queue'), { type: 'queue' });
   assert.deepEqual(getRouteFromHash('#/settings'), { type: 'settings' });
   assert.deepEqual(getRouteFromHash('#/smb'), { type: 'smb' });
   assert.deepEqual(getRouteFromHash('#/direct-install'), { type: 'direct-install' });
@@ -223,4 +226,48 @@ test('resolveDrive exact match takes precedence when subpath share appears earli
   }
 });
 
+test('formatHash and getHistoryChain handle queue route correctly', () => {
+  assert.equal(formatHash({ type: 'queue' }), '#/queue');
+  assert.deepEqual(getHistoryChain({ type: 'queue' }), [{ type: 'drives' }, { type: 'queue' }]);
+});
 
+test('writeHistory re-pushes route when history hash changes during back navigation', () => {
+  const pushed = [];
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    location: { hash: '#/' },
+    history: {
+      pushState: (state, title, url) => pushed.push({ state, title, url }),
+    },
+  };
+
+  try {
+    // Current route was drive/usb0, but user pressed back (popping hash to #/)
+    const currentRoute = { type: 'drive', driveId: 'usb0' };
+    writeHistory(currentRoute, false);
+    assert.equal(pushed.length, 1);
+    assert.equal(pushed[0].url, '#/drive/usb0');
+    assert.equal(pushed[0].state.type, 'drive');
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+test('writeHistory is idempotent when location hash matches target hash', () => {
+  const pushed = [];
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    location: { hash: '#/drive/usb0' },
+    history: {
+      pushState: (state, title, url) => pushed.push({ state, title, url }),
+    },
+  };
+
+  try {
+    const currentRoute = { type: 'drive', driveId: 'usb0' };
+    writeHistory(currentRoute, false);
+    assert.equal(pushed.length, 0);
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
