@@ -311,8 +311,9 @@ export default function App() {
 
     const groups = [];
     for (const [key, { items, srcInfo }] of groupMap.entries()) {
-      // Find base package
-      const base = items.find((p) => p.pkg_type === 'base') || null;
+      // Find base packages
+      const bases = items.filter((p) => p.pkg_type === 'base');
+      const base = bases[0] || null;
 
       // Find update packages, sorted newest version first
       const updates = items.filter((p) => p.pkg_type === 'update');
@@ -408,6 +409,7 @@ export default function App() {
         has_icon: !!(imagePkg && imagePkg.has_icon),
         iconPath: imagePkg ? imagePkg.path : '',
         base,
+        bases,
         updates,
         dlcs,
         others,

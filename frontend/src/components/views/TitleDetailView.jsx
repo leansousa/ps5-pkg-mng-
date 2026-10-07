@@ -119,6 +119,15 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                           <span>Leftovers Found</span>
                         </span>
                       ) : null}
+                      {selectedTitle.base && (selectedTitle.base.filename || selectedTitle.base.path) && (
+                        <p className="text-xs font-mono text-zinc-400 truncate mt-2" title={selectedTitle.base.path || selectedTitle.base.filename}>
+                          <span className="text-zinc-500 font-sans mr-1">Base:</span>
+                          <span className="text-zinc-300">{selectedTitle.base.filename || selectedTitle.base.path}</span>
+                          {selectedTitle.base.path && selectedTitle.base.filename && selectedTitle.base.path !== selectedTitle.base.filename ? (
+                            <span className="text-zinc-500 ml-2 font-normal">({selectedTitle.base.path})</span>
+                          ) : null}
+                        </p>
+                      )}
                     </div>
 
                     {(!selectedTitle.isBaseInstalled && !selectedTitle.base) ? (
@@ -263,6 +272,116 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                 </div>
               )}
             </div>
+
+            {/* Other Base Packages Section */}
+            {selectedTitle.bases && selectedTitle.bases.length > 1 && (
+              <div className="space-y-3">
+                <h3 className="text-xl font-bold text-white flex items-center space-x-2.5">
+                  <span>Other Base Packages</span>
+                  <span className="text-xs px-2.5 py-1 rounded-[2px] bg-blue-500/20 text-blue-300 border border-blue-500/30 font-bold">
+                    {selectedTitle.bases.length - 1} Available
+                  </span>
+                </h3>
+
+                <div className="space-y-2.5">
+                  {selectedTitle.bases.slice(1).map((pkg, index) => {
+                    const isBaseMulti = !!pkg.is_multipart && (Number(pkg.total_parts) > 1);
+                    const bTotalParts = Number(pkg.total_parts) || 1;
+                    const bFullSize = Number(pkg.total_pkg_size || pkg.file_size) || 0;
+                    const requiredSpace = bFullSize;
+                    const maxAvailable = maxAvailableFor(pkg.title_id || selectedTitle.title_id);
+                    const notEnoughSpace = !!storage && maxAvailable < requiredSpace;
+                    const canInstall = queueable(pkg);
+                    const isInstallDisabled = !canInstall || notEnoughSpace;
+
+                    return (
+                      <div
+                        key={pkg.path}
+                        className="rounded-[2px] p-5 bg-[#141520] border border-white/10 flex items-center justify-between space-x-5"
+                      >
+                        <div className="flex items-center space-x-5 min-w-0 flex-1">
+                          <div className="w-14 h-14 rounded-[2px] overflow-hidden bg-black/50 border border-blue-500/30 shrink-0 flex items-center justify-center relative">
+                            {pkg.has_icon ? (
+                              <BlurIcon
+                                pkg={pkg}
+                                alt={pkg.title_name || 'Base'}
+                                priority={index < 8}
+                                imgClassName="absolute inset-0 w-full h-full object-cover z-10 block"
+                              />
+                            ) : null}
+                            <div className="w-full h-full bg-blue-950/40 flex items-center justify-center text-blue-300 font-black text-xs tracking-wider">
+                              BASE
+                            </div>
+                          </div>
+
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center space-x-2.5 flex-wrap gap-y-1">
+                              <span className="text-base font-bold text-white">
+                                {pkg.app_version ? `Base ${formatVersion(pkg.app_version)}` : 'Base Package'}
+                              </span>
+                              {isBaseMulti ? (
+                                <>
+                                  <span className="text-xs sm:text-sm font-mono text-zinc-300 shrink-0 font-medium">
+                                    ({formatBytes(pkg.file_size)} / {formatBytes(bFullSize)})
+                                  </span>
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-[2px] bg-blue-500/20 text-blue-300 border border-blue-500/30 shrink-0">
+                                    {selectedTitle.sourceType === 'disc' ? 'Disc' : 'Part'} 1 of {bTotalParts}
+                                  </span>
+                                </>
+                              ) : (
+                                <span className="text-xs sm:text-sm font-mono text-zinc-400 shrink-0">
+                                  ({formatBytes(pkg.file_size)})
+                                </span>
+                              )}
+                            </div>
+
+                            {(pkg.filename || pkg.path) && (
+                              <p className="text-xs font-mono text-zinc-400 truncate mt-0.5" title={pkg.path || pkg.filename}>
+                                <span className="text-zinc-300">{pkg.filename || pkg.path}</span>
+                                {pkg.path && pkg.filename && pkg.path !== pkg.filename ? (
+                                  <span className="text-zinc-500 ml-2 font-normal">({pkg.path})</span>
+                                ) : null}
+                              </p>
+                            )}
+
+                            {isBaseMulti && (
+                              <p className="text-xs text-blue-300/80 mt-1">
+                                Subsequent {selectedTitle.sourceType === 'disc' ? 'discs' : 'parts'} will be requested during installation.
+                              </p>
+                            )}
+
+                            {!canInstall && !queued(pkg) && pkg.install_disabled_reason ? (
+                              <p className="text-xs text-amber-400 mt-1">
+                                • {pkg.install_disabled_reason}
+                              </p>
+                            ) : null}
+                          </div>
+                        </div>
+
+                        <div className="shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => !isInstallDisabled && handleInstall(pkg)}
+                            disabled={isInstallDisabled}
+                            className={`px-5 py-2.5 rounded-[2px] ps5-focus-item text-sm font-bold transition-all whitespace-nowrap ${
+                              isInstallDisabled
+                                ? 'bg-zinc-800 text-zinc-500 border border-white/5 cursor-not-allowed'
+                                : 'bg-blue-600 hover:bg-blue-500 text-white cursor-pointer'
+                            }`}
+                          >
+                            {queued(pkg) ? 'Queued' : notEnoughSpace
+                              ? 'No Space'
+                              : !canInstall
+                              ? (pkg.install_disabled_reason || 'Unavailable')
+                              : queueBusy ? 'Queue Base' : 'Install Base'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Updates Section */}
             {selectedTitle.updates.length > 0 && (

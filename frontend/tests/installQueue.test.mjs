@@ -130,6 +130,17 @@ test('TitleDetailView renders file name and path for updates (#24)', () => {
   assert.match(html, /\/usb0\/updates\/patch_v105_orig\.pkg/);
 });
 
+test('TitleDetailView renders file name, path, and other base packages (#27)', () => {
+  const base1 = { path: '/usb0/games/game_base_eu.pkg', filename: 'game_base_eu.pkg', app_version: '01.00', file_size: 2000, can_install: true };
+  const base2 = { path: '/usb0/games/game_base_us.pkg', filename: 'game_base_us.pkg', app_version: '01.00', file_size: 2000, can_install: true };
+  const html = render(Detail, { ...detailProps, title: { ...detailProps.title, base: base1, bases: [base1, base2], updates: [], dlcs: [] }, installQueue: queue([]) });
+  assert.match(html, /game_base_eu\.pkg/);
+  assert.match(html, /\/usb0\/games\/game_base_eu\.pkg/);
+  assert.match(html, /Other Base Packages/);
+  assert.match(html, /game_base_us\.pkg/);
+  assert.match(html, /\/usb0\/games\/game_base_us\.pkg/);
+});
+
 const local = (id, titleId, kind, iconUrl) => ({ id, status: 'ready', file: { name: `${id}.pkg`, size: 100 }, iconUrl,
   details: { title_name: 'Same game', title_id: titleId, pkg_type: kind, app_version: '1.00' } });
 
