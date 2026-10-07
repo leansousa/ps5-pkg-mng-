@@ -440,13 +440,16 @@ static void tick(void) {
     uint64_t expired[INSTALL_QUEUE_MAX_JOBS];
     size_t expired_count = 0;
     time_t now = time(NULL);
+    static time_t last_ttl_check = 0;
+    int check_ttl = (finished_ttl_seconds == 0) || (now != last_ttl_check);
+    if (check_ttl) last_ttl_check = now;
     pthread_mutex_lock(&mutex);
     for (size_t i = 0; jobs && i < INSTALL_QUEUE_MAX_JOBS; i++) {
         queue_job_t *job = &jobs[i];
         if (!job->id) continue;
         if (!pending(job->state)) {
             if (!job->finished || job->finished > now) job->finished = now;
-            if (finished_ttl_seconds >= 0 && (now - job->finished) >= finished_ttl_seconds && !terminal_job_needed(job)) {
+            if (check_ttl && finished_ttl_seconds >= 0 && (now - job->finished) >= finished_ttl_seconds && !terminal_job_needed(job)) {
                 install_log("[QUEUE] Auto-cleared job=%llu outcome=%s", (unsigned long long)job->id, state_name(job->state));
                 memset(job, 0, sizeof(*job));
                 continue;

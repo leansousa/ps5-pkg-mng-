@@ -26,7 +26,7 @@ typedef struct {
     uint64_t total_bytes;
 } install_queue_request_t;
 
-#define INSTALL_QUEUE_FINISHED_TTL_DEFAULT 60
+#define INSTALL_QUEUE_FINISHED_TTL_DEFAULT 3600
 
 int install_queue_init(void);
 void install_queue_shutdown(void);
