@@ -549,6 +549,31 @@ int main(void) {
     system("rm -rf /tmp/test_usb_seq");
     printf("Sequential USB stream installs passed!\n");
 
+    /* Test 13: Out-of-space error message translation (0x80B21104 / 0x80A30002) */
+    printf("Testing out-of-space error message translation (0x80B21104)...\n");
+    assert(strcmp(installer_strerror((int)0x80B21104u), "SCE_PLAYGO_ERROR_CORE_NO_FREE_SPACE") == 0);
+    assert(installer_is_nospace_error((int)0x80B21104u) == 1);
+    assert(installer_is_nospace_error((int)0x80A30002u) == 1);
+    assert(installer_is_nospace_error((int)0x80B21121u) == 0);
+
+    setenv("PKG_TEST_SIMULATE_0x80B21104", "1", 1);
+    res = installer_init("http://127.0.0.1:8085/");
+    assert(res == 0);
+    assert(fixture_write_ps5_pkg("/tmp/nospace.pkg", "PPSA90099", "NoSpaceGame", "gd", "01.000.000", 1) == 0);
+    assert(installer_start("/tmp/nospace.pkg") == 0);
+    assert(wait_for_state(0, 0, 15000) == 0);
+    installer_get_status(&st);
+    assert(st.failed == 1);
+    assert(st.completed == 0);
+    assert(st.error_code == (int)0x80B21104u);
+    assert(strstr(st.prompt_message, "Not enough free space for installation") != NULL);
+    assert(strstr(st.prompt_message, "0x80B21104") != NULL);
+
+    installer_shutdown();
+    unsetenv("PKG_TEST_SIMULATE_0x80B21104");
+    unlink("/tmp/nospace.pkg");
+    printf("Out-of-space error translation passed!\n");
+
     printf("\n>>> ALL INSTALLER TESTS PASSED! <<<\n");
     return 0;
 }

@@ -57,6 +57,8 @@ char *installer_status_to_json(void);
 void installer_notify_bytes_streamed(uint64_t bytes_read);
 /* Called by a stream reader; records failure without joining its own thread. */
 void installer_notify_source_error(const char *expected_path);
+const char *installer_strerror(int code);
+int installer_is_nospace_error(int code);
 void install_log(const char *fmt, ...);
 char *install_log_get_text(size_t *out_len);
 void install_log_clear(void);

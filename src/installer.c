@@ -707,10 +707,9 @@ void installer_notify_bytes_streamed(uint64_t bytes_read) {
     pthread_mutex_unlock(&g_installer_mutex);
 }
 
-#if defined(__Prospero__) || defined(PS5_BUILD)
 /* Human-readable names for installer/playgo error codes (verified against
    etaHEN error_translator and on-console results). Unknown codes -> NULL. */
-static const char *installer_strerror(int code) {
+const char *installer_strerror(int code) {
     if (code == 0) {
         return "OK";
     }
@@ -724,6 +723,7 @@ static const char *installer_strerror(int code) {
     case 0x80A30001u: return "APP_INSTALLER_ERROR_UNKNOWN";
     case 0x80A30002u: return "APP_INSTALLER_ERROR_NOSPACE";
     case 0x80A30003u: return "APP_INSTALLER_ERROR_PARAM";
+    case 0x80B21104u: return "SCE_PLAYGO_ERROR_CORE_NO_FREE_SPACE";
     case 0x80B21121u: return "SCE_PLAYGO_ERROR_CORE_NET_NOT_CONNECTED";
     case 0x80B21164u: return "PLAYGO_ERROR_CORE_INVALID_CONTENT_ID";
     case 0x80B21167u: return "PLAYGO_ERROR_CORE_CONTENT_ID_MISMATCH";
@@ -736,6 +736,13 @@ static const char *installer_strerror(int code) {
     default: return NULL;
     }
 }
+
+int installer_is_nospace_error(int code) {
+    uint32_t c = (uint32_t)code;
+    return c == 0x80B21104u || c == 0x80A30002u;
+}
+
+#if defined(__Prospero__) || defined(PS5_BUILD)
 
 /* Slot-family errors are transient (e.g. patch installed while the system
    still finalizes the base): safe to retry with a fresh session. Anything
@@ -1400,11 +1407,20 @@ static void *stream_installer_worker(void *arg) {
         g_status.failed = 1;
         g_status.error_code = ret;
         strncpy(g_status.status_str, "error", sizeof(g_status.status_str) - 1);
-        snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-                 "Install failed: %s (0x%08X)", rname ? rname : "unknown", (unsigned)ret);
+        if (installer_is_nospace_error(ret)) {
+            snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
+                     "Not enough free space for installation (0x%08X)", (unsigned)ret);
+        } else {
+            snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
+                     "Install failed: %s (0x%08X)", rname ? rname : "unknown", (unsigned)ret);
+        }
         pthread_mutex_unlock(&g_installer_mutex);
         install_service_close(&service);
-        ps5_notify("Install error: 0x%08X (%s)", ret, rname ? rname : "unknown");
+        if (installer_is_nospace_error(ret)) {
+            ps5_notify("Not enough free space for installation");
+        } else {
+            ps5_notify("Install error: 0x%08X (%s)", ret, rname ? rname : "unknown");
+        }
         free(extracted_icon);
         ws_live_abort();
         if (!is_filesystem_install) {
@@ -1528,8 +1544,14 @@ static void *stream_installer_worker(void *arg) {
                             g_status.failed = 1;
                             g_status.error_code = fb_ret;
                             strncpy(g_status.status_str, "error", sizeof(g_status.status_str) - 1);
-                            snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-                                     "Direct storage install failed: 0x%08X", (unsigned)fb_ret);
+                            if (installer_is_nospace_error(fb_ret)) {
+                                snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
+                                         "Not enough free space for installation (0x%08X)", (unsigned)fb_ret);
+                                ps5_notify("Not enough free space for installation");
+                            } else {
+                                snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
+                                         "Direct storage install failed: 0x%08X", (unsigned)fb_ret);
+                            }
                             pthread_mutex_unlock(&g_installer_mutex);
                             break;
                         }
@@ -1544,10 +1566,25 @@ static void *stream_installer_worker(void *arg) {
                     g_status.failed = 1;
                     g_status.error_code = sys_status.error_info.error_code ? sys_status.error_info.error_code : -1;
                     strncpy(g_status.status_str, "error", sizeof(g_status.status_str) - 1);
-                    snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
-                             "System install error: 0x%08X", g_status.error_code);
+                    if (installer_is_nospace_error(sys_status.error_info.error_code)) {
+                        snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
+                                 "Not enough free space for installation (0x%08X)",
+                                 (unsigned)sys_status.error_info.error_code);
+                    } else if (sname) {
+                        snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
+                                 "System install error: %s (0x%08X)", sname, (unsigned)g_status.error_code);
+                    } else {
+                        snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
+                                 "System install error: 0x%08X", (unsigned)g_status.error_code);
+                    }
                     pthread_mutex_unlock(&g_installer_mutex);
-                    ps5_notify("System install error: 0x%08X", g_status.error_code);
+                    if (installer_is_nospace_error(sys_status.error_info.error_code)) {
+                        ps5_notify("Not enough free space for installation");
+                    } else if (sname) {
+                        ps5_notify("System install error: 0x%08X (%s)", g_status.error_code, sname);
+                    } else {
+                        ps5_notify("System install error: 0x%08X", g_status.error_code);
+                    }
                     break;
                 }
 
@@ -1701,6 +1738,23 @@ static void *stream_installer_worker(void *arg) {
         usleep(50000);
 
         installer_submitted();
+    } else if (getenv("PKG_TEST_SIMULATE_0x80B21104") != NULL) {
+        int err = (int)0x80B21104u;
+        install_log("[INSTALLER] Helper pid=999 install returned 0x80B21104 (SCE_PLAYGO_ERROR_CORE_NO_FREE_SPACE)");
+        pthread_mutex_lock(&g_installer_mutex);
+        g_status.is_installing = 0;
+        g_status.failed = 1;
+        g_status.error_code = err;
+        strncpy(g_status.status_str, "error", sizeof(g_status.status_str) - 1);
+        snprintf(g_status.prompt_message, sizeof(g_status.prompt_message),
+                 "Not enough free space for installation (0x%08X)", (unsigned)err);
+        pthread_mutex_unlock(&g_installer_mutex);
+        ps5_notify("Not enough free space for installation");
+        if (!is_filesystem_install) {
+            stream_server_session_stop();
+        }
+        free(extracted_icon);
+        return NULL;
     } else {
         char mock_pkg_path[512];
         pthread_mutex_lock(&g_installer_mutex);
