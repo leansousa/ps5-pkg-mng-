@@ -120,6 +120,16 @@ test('bulk DLC action requires multiple addable packages, including dependents o
   assert.doesNotMatch(render(Detail, { ...detailProps, title: { ...detailProps.title, dlcs: [dlc(1)] }, installQueue: queue([job(1, 'queued')]) }), /all DLCs/);
 });
 
+test('TitleDetailView renders file name and path for updates (#24)', () => {
+  const upd1 = { path: '/usb0/updates/patch_v105_mod.pkg', filename: 'patch_v105_mod.pkg', app_version: '01.05', file_size: 1000, can_install: true };
+  const upd2 = { path: '/usb0/updates/patch_v105_orig.pkg', filename: 'patch_v105_orig.pkg', app_version: '01.05', file_size: 1000, can_install: true };
+  const html = render(Detail, { ...detailProps, title: { ...detailProps.title, updates: [upd1, upd2], dlcs: [] }, installQueue: queue([]) });
+  assert.match(html, /patch_v105_mod\.pkg/);
+  assert.match(html, /\/usb0\/updates\/patch_v105_mod\.pkg/);
+  assert.match(html, /patch_v105_orig\.pkg/);
+  assert.match(html, /\/usb0\/updates\/patch_v105_orig\.pkg/);
+});
+
 const local = (id, titleId, kind, iconUrl) => ({ id, status: 'ready', file: { name: `${id}.pkg`, size: 100 }, iconUrl,
   details: { title_name: 'Same game', title_id: titleId, pkg_type: kind, app_version: '1.00' } });
 

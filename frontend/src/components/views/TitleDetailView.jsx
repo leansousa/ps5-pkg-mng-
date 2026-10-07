@@ -341,6 +341,15 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                               )}
                             </div>
 
+                            {(pkg.filename || pkg.path) && (
+                              <p className="text-xs font-mono text-zinc-400 truncate mt-0.5" title={pkg.path || pkg.filename}>
+                                <span className="text-zinc-300">{pkg.filename || pkg.path}</span>
+                                {pkg.path && pkg.filename && pkg.path !== pkg.filename ? (
+                                  <span className="text-zinc-500 ml-2 font-normal">({pkg.path})</span>
+                                ) : null}
+                              </p>
+                            )}
+
                             {isUpdMultipart && (
                               <p className="text-xs text-purple-300/80 mt-1">
                                 Subsequent {selectedTitle.sourceType === 'disc' ? 'discs' : 'parts'} will be requested during installation.
