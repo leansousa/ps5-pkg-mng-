@@ -8,26 +8,47 @@ export function getSmbShareFromStorage(driveId) {
     if (!saved) return null;
     const parsed = JSON.parse(saved);
     if (!Array.isArray(parsed?.smb_shares)) return null;
-    const share = parsed.smb_shares.find((s) => {
+    // 1. Exact match pass: id, label, or exact full URL
+    let share = parsed.smb_shares.find((s) => {
       if (!s) return false;
       if (s.id && s.id === driveId) return true;
       if (s.label && s.label === driveId) return true;
       const sServer = (s.server || '').replace(/^smb:\/\/+/i, '').replace(/^[\\/]+|[\\/]+$/g, '');
       const sShare = (s.share || '').replace(/^[\\/]+|[\\/]+$/g, '');
+      const sSub = (s.path || '').replace(/^[\\/]+|[\\/]+$/g, '');
       if (sServer && sShare) {
         const sPort = s.port && Number(s.port) !== 445 ? `:${s.port}` : '';
-        const sPath = `smb://${sServer}${sPort}/${sShare}`;
-        if (sPath === driveId || `smb://${sServer}/${sShare}` === driveId) return true;
+        const sSubPart = sSub ? `/${sSub}` : '';
+        const sPath = `smb://${sServer}${sPort}/${sShare}${sSubPart}`;
+        const sPathNoPort = `smb://${sServer}/${sShare}${sSubPart}`;
+        if (sPath === driveId || sPathNoPort === driveId) return true;
       }
       return false;
     });
+
+    // 2. Fallback pass: match by server and share root when no exact match exists
+    if (!share) {
+      share = parsed.smb_shares.find((s) => {
+        if (!s) return false;
+        const sServer = (s.server || '').replace(/^smb:\/\/+/i, '').replace(/^[\\/]+|[\\/]+$/g, '');
+        const sShare = (s.share || '').replace(/^[\\/]+|[\\/]+$/g, '');
+        if (sServer && sShare) {
+          const sPort = s.port && Number(s.port) !== 445 ? `:${s.port}` : '';
+          return `smb://${sServer}${sPort}/${sShare}` === driveId || `smb://${sServer}/${sShare}` === driveId;
+        }
+        return false;
+      });
+    }
     if (!share) return null;
     const cleanServer = (share.server || '').replace(/^smb:\/\/+/i, '').replace(/^[\\/]+|[\\/]+$/g, '');
     const cleanShare = (share.share || '').replace(/^[\\/]+|[\\/]+$/g, '');
+    const cleanSub = (share.path || '').replace(/^[\\/]+|[\\/]+$/g, '');
     const serverShare = (cleanServer && cleanShare) ? `${cleanServer}/${cleanShare}` : (cleanServer || cleanShare);
-    const label = (share.label && share.label.trim()) || serverShare || share.id || driveId;
+    const fullServerShare = cleanSub ? `${serverShare}/${cleanSub}` : serverShare;
+    const label = (share.label && share.label.trim()) || fullServerShare || share.id || driveId;
     const portPart = share.port && Number(share.port) !== 445 ? `:${share.port}` : '';
-    const path = (cleanServer && cleanShare) ? `smb://${cleanServer}${portPart}/${cleanShare}` : (share.path || driveId);
+    const subPart = cleanSub ? `/${cleanSub}` : '';
+    const path = (cleanServer && cleanShare) ? `smb://${cleanServer}${portPart}/${cleanShare}${subPart}` : (share.path || driveId);
     return {
       id: share.id || driveId,
       label,

@@ -7,6 +7,7 @@ import {
   getSmbShareFromStorage,
 } from '../src/hooks/useHistoryNavigation.js';
 import { ALL_SOURCES_DRIVE } from '../src/constants/config.js';
+import { getSourceInfo } from '../src/utils/sourceInfo.js';
 
 test('getRouteFromHash parses drive and title hashes correctly', () => {
   assert.deepEqual(getRouteFromHash(''), { type: 'drives' });
@@ -113,4 +114,113 @@ test('drive reconciliation matches drive by id or path and updates friendly meta
   assert.equal(match.path, 'smb://192.168.1.100/games');
   assert.equal(match.pkg_count, 8);
 });
+
+test('resolveDrive falls back to localStorage SMB share with subpath', () => {
+  const mockStorage = {
+    pkgmgr_settings: JSON.stringify({
+      smb_shares: [
+        {
+          id: 'smb_ps5',
+          label: 'PS5 Games',
+          server: '192.168.1.50',
+          port: 445,
+          share: 'games',
+          path: 'PS5',
+          browse_only: false,
+        },
+        {
+          id: 'smb_ps4',
+          label: 'PS4 Games',
+          server: '192.168.1.50',
+          port: 445,
+          share: 'games',
+          path: 'PS4',
+          browse_only: false,
+        },
+      ],
+    }),
+  };
+
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    localStorage: {
+      getItem: (key) => mockStorage[key] || null,
+    },
+  };
+
+  try {
+    const ps5Drive = resolveDrive('smb_ps5', []);
+    assert.equal(ps5Drive.id, 'smb_ps5');
+    assert.equal(ps5Drive.path, 'smb://192.168.1.50/games/PS5');
+    assert.equal(ps5Drive.label, 'PS5 Games');
+
+    const ps4Drive = resolveDrive('smb_ps4', []);
+    assert.equal(ps4Drive.id, 'smb_ps4');
+    assert.equal(ps4Drive.path, 'smb://192.168.1.50/games/PS4');
+    assert.equal(ps4Drive.label, 'PS4 Games');
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+test('getSourceInfo matches most specific SMB drive when multiple shares use same server and share', () => {
+  const drives = [
+    { id: 'smb_ps5', label: 'PS5 Games', path: 'smb://192.168.1.50/games/PS5', type: 'smb' },
+    { id: 'smb_ps4', label: 'PS4 Games', path: 'smb://192.168.1.50/games/PS4', type: 'smb' },
+  ];
+
+  const ps5Pkg = getSourceInfo('smb://192.168.1.50/games/PS5/title1.pkg', drives);
+  assert.equal(ps5Pkg.id, 'smb_ps5');
+  assert.equal(ps5Pkg.name, 'PS5 Games');
+
+  const ps4Pkg = getSourceInfo('smb://192.168.1.50/games/PS4/title2.pkg', drives);
+  assert.equal(ps4Pkg.id, 'smb_ps4');
+  assert.equal(ps4Pkg.name, 'PS4 Games');
+});
+
+test('resolveDrive exact match takes precedence when subpath share appears earlier in settings', () => {
+  const mockStorage = {
+    pkgmgr_settings: JSON.stringify({
+      smb_shares: [
+        {
+          id: 'smb_sub',
+          label: 'PS5 Subfolder',
+          server: '192.168.1.50',
+          port: 445,
+          share: 'games',
+          path: 'PS5',
+        },
+        {
+          id: 'smb_root',
+          label: 'Games Root',
+          server: '192.168.1.50',
+          port: 445,
+          share: 'games',
+          path: '',
+        },
+      ],
+    }),
+  };
+
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    localStorage: {
+      getItem: (key) => mockStorage[key] || null,
+    },
+  };
+
+  try {
+    const rootDrive = resolveDrive('smb://192.168.1.50/games', []);
+    assert.equal(rootDrive.id, 'smb_root');
+    assert.equal(rootDrive.label, 'Games Root');
+    assert.equal(rootDrive.path, 'smb://192.168.1.50/games');
+
+    const subDrive = resolveDrive('smb://192.168.1.50/games/PS5', []);
+    assert.equal(subDrive.id, 'smb_sub');
+    assert.equal(subDrive.label, 'PS5 Subfolder');
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
 

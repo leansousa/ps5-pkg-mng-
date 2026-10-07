@@ -306,6 +306,119 @@ int main(void) {
     rmdir(smb_test_root);
     puts("SMB rename and catalog recovery quick scan passed");
 
+    /* Test: Multiple Samba locations on the same server/share retaining distinct paths (#32) */
+    char smb_multi_root[] = "/tmp/mock_smb/multi-XXXXXX";
+    assert(mkdtemp(smb_multi_root));
+    char ps5_dir[512], ps4_dir[512];
+    snprintf(ps5_dir, sizeof(ps5_dir), "%s/ps5_games", smb_multi_root);
+    snprintf(ps4_dir, sizeof(ps4_dir), "%s/ps4_games", smb_multi_root);
+    assert(mkdir(ps5_dir, 0700) == 0);
+    assert(mkdir(ps4_dir, 0700) == 0);
+
+    /* 2 pkgs in ps5_games, 3 pkgs in ps4_games */
+    char p1[512], p2[512], p3[512], p4[512], p5[512];
+    snprintf(p1, sizeof(p1), "%s/0001.pkg", ps5_dir);
+    snprintf(p2, sizeof(p2), "%s/0002.pkg", ps5_dir);
+    snprintf(p3, sizeof(p3), "%s/0001.pkg", ps4_dir);
+    snprintf(p4, sizeof(p4), "%s/0002.pkg", ps4_dir);
+    snprintf(p5, sizeof(p5), "%s/0003.pkg", ps4_dir);
+    assert(fixture_write_ps4_pkg(p1, "CUSA91001", "PS5 Game 1", "gd", "01.00") == 0);
+    assert(fixture_write_ps4_pkg(p2, "CUSA91002", "PS5 Game 2", "gd", "01.00") == 0);
+    assert(fixture_write_ps4_pkg(p3, "CUSA92001", "PS4 Game 1", "gd", "01.00") == 0);
+    assert(fixture_write_ps4_pkg(p4, "CUSA92002", "PS4 Game 2", "gd", "01.00") == 0);
+    assert(fixture_write_ps4_pkg(p5, "CUSA92003", "PS4 Game 3", "gd", "01.00") == 0);
+
+    memset(&settings, 0, sizeof(settings));
+    settings.smb_share_count = 2;
+    smb_share_config_t *s_ps5 = &settings.smb_shares[0];
+    s_ps5->enabled = 1;
+    s_ps5->port = 445;
+    strcpy(s_ps5->id, "smb_ps5");
+    strcpy(s_ps5->label, "PS5 Games");
+    strcpy(s_ps5->server, "smb://mock/");
+    strcpy(s_ps5->share, "pkgs");
+    snprintf(s_ps5->path, sizeof(s_ps5->path), "%s/ps5_games", smb_multi_root + strlen("/tmp/mock_smb/"));
+
+    smb_share_config_t *s_ps4 = &settings.smb_shares[1];
+    s_ps4->enabled = 1;
+    s_ps4->port = 445;
+    strcpy(s_ps4->id, "smb_ps4");
+    strcpy(s_ps4->label, "PS4 Games");
+    strcpy(s_ps4->server, "mock");
+    strcpy(s_ps4->share, "pkgs");
+    snprintf(s_ps4->path, sizeof(s_ps4->path), "%s/ps4_games", smb_multi_root + strlen("/tmp/mock_smb/"));
+    /* Introduce Windows-style backslashes in path */
+    for (char *c = s_ps4->path; *c; c++) { if (*c == '/') *c = '\\'; }
+    assert(pkg_cache_set_settings(&settings) == 0);
+
+    pkg_scanner_init();
+    assert(pkg_scanner_scan() == 5);
+
+    /* Verify drives registered distinct paths and distinct package counts */
+    size_t d_count = pkg_scanner_get_drive_count();
+    pkg_drive_t d_ps5 = {0}, d_ps4 = {0};
+    int found_d_ps5 = 0, found_d_ps4 = 0;
+    for (size_t d = 0; d < d_count; d++) {
+        pkg_drive_t drv;
+        if (pkg_scanner_get_drive_at(d, &drv) == 0) {
+            if (strcmp(drv.id, "smb_ps5") == 0) {
+                d_ps5 = drv;
+                found_d_ps5 = 1;
+            } else if (strcmp(drv.id, "smb_ps4") == 0) {
+                d_ps4 = drv;
+                found_d_ps4 = 1;
+            }
+        }
+    }
+    assert(found_d_ps5 && found_d_ps4);
+    assert(strstr(d_ps5.path, "/ps5_games") != NULL);
+    assert(strstr(d_ps4.path, "/ps4_games") != NULL);
+    assert(strcmp(d_ps5.path, d_ps4.path) != 0);
+    assert(d_ps5.pkg_count == 2);
+    assert(d_ps4.pkg_count == 3);
+
+    /* Verify smb_client_find_share_cfg correctly maps URLs by subpath */
+    char test_url1[512], test_url2[512];
+    snprintf(test_url1, sizeof(test_url1), "%s/0001.pkg", d_ps5.path);
+    snprintf(test_url2, sizeof(test_url2), "%s/0001.pkg", d_ps4.path);
+    smb_share_config_t cfg_found;
+    assert(smb_client_find_share_cfg(test_url1, &cfg_found) == 0);
+    assert(strcmp(cfg_found.id, "smb_ps5") == 0);
+    assert(smb_client_find_share_cfg(test_url2, &cfg_found) == 0);
+    assert(strcmp(cfg_found.id, "smb_ps4") == 0);
+
+    /* Quick scan one share: must NOT overwrite or wipe the other share */
+    changed = -1;
+    assert(pkg_scanner_scan_quick("smb_ps4", &changed) == 5);
+    assert(changed == 0);
+    for (size_t d = 0; d < pkg_scanner_get_drive_count(); d++) {
+        pkg_drive_t drv;
+        if (pkg_scanner_get_drive_at(d, &drv) == 0) {
+            if (strcmp(drv.id, "smb_ps5") == 0) assert(drv.pkg_count == 2);
+            if (strcmp(drv.id, "smb_ps4") == 0) assert(drv.pkg_count == 3);
+        }
+    }
+
+    /* Add new package to ps4_games and quick scan ps4: ps5 count must remain intact */
+    char p6[512];
+    snprintf(p6, sizeof(p6), "%s/0004.pkg", ps4_dir);
+    assert(fixture_write_ps4_pkg(p6, "CUSA92004", "PS4 Game 4", "gd", "01.00") == 0);
+    changed = -1;
+    assert(pkg_scanner_scan_quick("smb_ps4", &changed) == 6);
+    assert(changed == 1);
+    for (size_t d = 0; d < pkg_scanner_get_drive_count(); d++) {
+        pkg_drive_t drv;
+        if (pkg_scanner_get_drive_at(d, &drv) == 0) {
+            if (strcmp(drv.id, "smb_ps5") == 0) assert(drv.pkg_count == 2);
+            if (strcmp(drv.id, "smb_ps4") == 0) assert(drv.pkg_count == 4);
+        }
+    }
+
+    /* Cleanup multi-root */
+    unlink(p1); unlink(p2); unlink(p3); unlink(p4); unlink(p5); unlink(p6);
+    rmdir(ps5_dir); rmdir(ps4_dir); rmdir(smb_multi_root);
+    puts("Multiple Samba locations distinct path and isolation test passed");
+
     pkg_cache_clear();
     char file[512];
     snprintf(file, sizeof(file), "%s/settings.json", cache);
