@@ -112,10 +112,10 @@ export function formatHash(route) {
   return '#/';
 }
 
-export function writeHistory(route, replace = false, force = false) {
+export function writeHistory(route, replace = false) {
   if (!window.history || !window.history.pushState) return;
   const hash = formatHash(route);
-  if (!force && window.location.hash === hash) return;
+  if (window.location.hash === hash) return;
   const state = { ...route, hash };
   try {
     if (replace && window.history.replaceState) {
@@ -278,7 +278,6 @@ export function useHistoryNavigation(props) {
   }, [showDirectInstall]);
 
   const modalStateRef = useRef({});
-
   modalStateRef.current = {
     showInstallQueue,
     setShowInstallQueue,
@@ -408,7 +407,7 @@ export function useHistoryNavigation(props) {
       if (m.showInstallQueue) {
         if (m.setShowInstallQueue) m.setShowInstallQueue(false);
         // Re-push current route so we remain on the current page in history
-        writeHistory(currentRouteRef.current, false, true);
+        writeHistory(currentRouteRef.current, false);
         return;
       }
 
@@ -425,7 +424,7 @@ export function useHistoryNavigation(props) {
         if (m.selectedLeftoverToDelete && m.setSelectedLeftoverToDelete) m.setSelectedLeftoverToDelete(null);
 
         // Re-push current route so we remain on the current page in history
-        writeHistory(currentRouteRef.current, false, true);
+        writeHistory(currentRouteRef.current, false);
         return;
       }
 

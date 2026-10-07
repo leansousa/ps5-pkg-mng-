@@ -61,13 +61,6 @@ test('queue panel is a modal dialog and aborted jobs are finished without Retry'
   assert.doesNotMatch(html, /Retry|Remove from queue/);
 });
 
-test('queue panel respects show prop like other modals', () => {
-  const hidden = render(Panel, { show: false, queue: queue([]), onClose() {} });
-  assert.equal(hidden, '');
-  const shown = render(Panel, { show: true, queue: queue([]), onClose() {} });
-  assert.match(shown, /data-modal-dialog="true"/);
-});
-
 test('PS5-managed installs show submission status without invented progress or cancellation', () => {
   const html = render(Panel, { queue: queue([job(1, 'submitted', { is_direct_storage: true, progress: -1 })]), onClose() {} });
   assert.match(html, /Submitted to PS5/);

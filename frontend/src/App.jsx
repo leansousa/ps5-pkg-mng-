@@ -937,13 +937,7 @@ export default function App() {
 
       <Footer appVersion={appVersion} />
       </fieldset>
-
-      <InstallQueuePanel
-        show={showInstallQueue}
-        queue={installQueue}
-        debugEnabled={Boolean(settings.pkg_install_debug)}
-        onClose={() => setShowInstallQueue(false)}
-      />
+      {showInstallQueue && <InstallQueuePanel queue={installQueue} debugEnabled={Boolean(settings.pkg_install_debug)} onClose={() => setShowInstallQueue(false)} />}
 
       <DonateModal
         show={showDonateModal}

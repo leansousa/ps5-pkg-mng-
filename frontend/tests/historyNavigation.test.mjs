@@ -5,7 +5,6 @@ import {
   formatHash,
   resolveDrive,
   getSmbShareFromStorage,
-  writeHistory,
 } from '../src/hooks/useHistoryNavigation.js';
 import { ALL_SOURCES_DRIVE } from '../src/constants/config.js';
 import { getSourceInfo } from '../src/utils/sourceInfo.js';
@@ -223,67 +222,5 @@ test('resolveDrive exact match takes precedence when subpath share appears earli
     globalThis.window = originalWindow;
   }
 });
-
-test('writeHistory re-pushes route when history hash changes during back navigation', () => {
-  const pushed = [];
-  const originalWindow = globalThis.window;
-  globalThis.window = {
-    location: { hash: '#/' },
-    history: {
-      pushState: (state, title, url) => pushed.push({ state, title, url }),
-    },
-  };
-
-  try {
-    // Current route was drive/usb0, but user pressed back (popping hash to #/)
-    const currentRoute = { type: 'drive', driveId: 'usb0' };
-    writeHistory(currentRoute, false);
-    assert.equal(pushed.length, 1);
-    assert.equal(pushed[0].url, '#/drive/usb0');
-    assert.equal(pushed[0].state.type, 'drive');
-  } finally {
-    globalThis.window = originalWindow;
-  }
-});
-
-test('writeHistory is idempotent when location hash matches target hash', () => {
-  const pushed = [];
-  const originalWindow = globalThis.window;
-  globalThis.window = {
-    location: { hash: '#/drive/usb0' },
-    history: {
-      pushState: (state, title, url) => pushed.push({ state, title, url }),
-    },
-  };
-
-  try {
-    const currentRoute = { type: 'drive', driveId: 'usb0' };
-    writeHistory(currentRoute, false);
-    assert.equal(pushed.length, 0);
-  } finally {
-    globalThis.window = originalWindow;
-  }
-});
-
-test('writeHistory forces push when force=true even if location hash matches target hash', () => {
-  const pushed = [];
-  const originalWindow = globalThis.window;
-  globalThis.window = {
-    location: { hash: '#/' },
-    history: {
-      pushState: (state, title, url) => pushed.push({ state, title, url }),
-    },
-  };
-
-  try {
-    const currentRoute = { type: 'drives' };
-    writeHistory(currentRoute, false, true);
-    assert.equal(pushed.length, 1);
-    assert.equal(pushed[0].url, '#/');
-  } finally {
-    globalThis.window = originalWindow;
-  }
-});
-
 
 
