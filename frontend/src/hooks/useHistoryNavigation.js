@@ -404,15 +404,20 @@ export function useHistoryNavigation(props) {
     const handlePopState = () => {
       // 2. Close modal if any modal dialog is currently open
       const m = modalStateRef.current;
+      if (m.showInstallQueue) {
+        if (m.setShowInstallQueue) m.setShowInstallQueue(false);
+        // Re-push current route so we remain on the current page in history
+        writeHistory(currentRouteRef.current, false);
+        return;
+      }
+
       const anyModal = Boolean(
-        m.showInstallQueue ||
         m.showDonateModal ||
         m.showClearCacheModal ||
         m.showSmbModal ||
         m.selectedLeftoverToDelete
       );
       if (anyModal) {
-        if (m.showInstallQueue && m.setShowInstallQueue) m.setShowInstallQueue(false);
         if (m.showDonateModal && m.handleCloseDonateModal) m.handleCloseDonateModal();
         if (m.showClearCacheModal && m.setShowClearCacheModal) m.setShowClearCacheModal(false);
         if (m.showSmbModal && m.setShowSmbModal) m.setShowSmbModal(false);
