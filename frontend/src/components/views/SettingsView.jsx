@@ -153,6 +153,28 @@ export default function SettingsView({ settings, onSaveSettings, onClose, onOpen
                       </svg>
                     </div>
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onSaveSettings({ ...safeSettings, show_package_paths: !safeSettings.show_package_paths })}
+                    className="w-full bg-white/5 hover:bg-white/10 border border-white/10 rounded-[2px] ps5-focus-item p-4 flex items-center justify-between transition-colors cursor-pointer text-left"
+                  >
+                    <div className="min-w-0 flex-1 mr-4">
+                      <span className="text-sm font-semibold text-white block">Show package filename and path</span>
+                      <span className="text-xs text-zinc-400 block mt-1">
+                        Display filename and file path on the package details screen.
+                      </span>
+                    </div>
+                    <div className={`w-6 h-6 rounded-[2px] border flex items-center justify-center shrink-0 transition-colors ${
+                      safeSettings.show_package_paths
+                        ? 'bg-blue-600 border-blue-500 text-white'
+                        : 'bg-black/40 border-white/20 text-transparent'
+                    }`}>
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    </div>
+                  </button>
                 </div>
 
                 {/* Home Screen Shortcut Card */}

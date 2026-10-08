@@ -521,6 +521,7 @@ const mockSettings = {
   move_installed_to_end: true,
   fade_installed_packages: true,
   all_sources_mode: true,
+  show_package_paths: false,
   smb_shares: [
     {
       id: 'smb_games',

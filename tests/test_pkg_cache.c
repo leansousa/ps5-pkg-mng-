@@ -36,6 +36,7 @@ int main(void) {
     assert(settings.fade_installed_packages == 1);
     assert(settings.all_sources_mode == 0);
     assert(settings.pkg_install_debug == 0);
+    assert(settings.show_package_paths == 0);
     assert(settings.smb_share_count == 0);
     printf("  PASSED: Default settings match specifications\n");
 
@@ -45,6 +46,7 @@ int main(void) {
     settings.fade_installed_packages = 0;
     settings.all_sources_mode = 1;
     settings.pkg_install_debug = 1;
+    settings.show_package_paths = 1;
     settings.smb_share_count = 1;
     memset(&settings.smb_shares[0], 0, sizeof(smb_share_config_t));
     settings.smb_shares[0].enabled = 1;
@@ -63,6 +65,7 @@ int main(void) {
     assert(reloaded.fade_installed_packages == 0);
     assert(reloaded.all_sources_mode == 1);
     assert(reloaded.pkg_install_debug == 1);
+    assert(reloaded.show_package_paths == 1);
     assert(reloaded.smb_share_count == 1);
     assert(strcmp(reloaded.smb_shares[0].server, "192.168.1.100") == 0);
 
@@ -73,6 +76,7 @@ int main(void) {
     assert(reloaded.fade_installed_packages == 0);
     assert(reloaded.all_sources_mode == 1);
     assert(reloaded.pkg_install_debug == 1);
+    assert(reloaded.show_package_paths == 1);
     assert(reloaded.smb_share_count == 1);
     printf("  PASSED: Settings persisted and reloaded from disk\n");
 

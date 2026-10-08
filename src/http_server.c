@@ -922,11 +922,12 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         char *buf = (char *)malloc(spos + 1024);
         if (!buf) return MHD_NO;
         snprintf(buf, spos + 1024,
-                 "{\"move_installed_to_end\":%s,\"fade_installed_packages\":%s,\"all_sources_mode\":%s,\"pkg_install_debug\":%s,\"smb_shares\":[%s]}",
+                 "{\"move_installed_to_end\":%s,\"fade_installed_packages\":%s,\"all_sources_mode\":%s,\"pkg_install_debug\":%s,\"show_package_paths\":%s,\"smb_shares\":[%s]}",
                  s.move_installed_to_end ? "true" : "false",
                  s.fade_installed_packages ? "true" : "false",
                  s.all_sources_mode ? "true" : "false",
-                 s.pkg_install_debug ? "true" : "false", shares_json);
+                 s.pkg_install_debug ? "true" : "false",
+                 s.show_package_paths ? "true" : "false", shares_json);
         struct MHD_Response *resp = MHD_create_response_from_buffer(
             strlen(buf), (void *)buf, MHD_RESPMEM_MUST_FREE);
         add_cors_headers(resp);
@@ -976,6 +977,15 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                     s.pkg_install_debug = 1;
                 } else if (strncmp(dptr + 20, "false", 5) == 0 || strncmp(dptr + 21, "false", 5) == 0) {
                     s.pkg_install_debug = 0;
+                }
+            }
+
+            char *pptr = strstr(ps->data, "\"show_package_paths\":");
+            if (pptr) {
+                if (strncmp(pptr + 21, "true", 4) == 0 || strncmp(pptr + 22, "true", 4) == 0) {
+                    s.show_package_paths = 1;
+                } else if (strncmp(pptr + 21, "false", 5) == 0 || strncmp(pptr + 22, "false", 5) == 0) {
+                    s.show_package_paths = 0;
                 }
             }
 

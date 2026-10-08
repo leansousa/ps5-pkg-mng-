@@ -121,10 +121,10 @@ test('bulk DLC action requires multiple addable packages, including dependents o
   assert.doesNotMatch(render(Detail, { ...detailProps, title: { ...detailProps.title, dlcs: [dlc(1)] }, installQueue: queue([job(1, 'queued')]) }), /all DLCs/);
 });
 
-test('TitleDetailView renders file name and path for updates (#24)', () => {
+test('TitleDetailView renders file name and path for updates (#24) when enabled in settings', () => {
   const upd1 = { path: '/usb0/updates/patch_v105_mod.pkg', filename: 'patch_v105_mod.pkg', app_version: '01.05', file_size: 1000, can_install: true };
   const upd2 = { path: '/usb0/updates/patch_v105_orig.pkg', filename: 'patch_v105_orig.pkg', app_version: '01.05', file_size: 1000, can_install: true };
-  const html = render(Detail, { ...detailProps, title: { ...detailProps.title, updates: [upd1, upd2], dlcs: [] }, installQueue: queue([]) });
+  const html = render(Detail, { ...detailProps, settings: { show_package_paths: true }, title: { ...detailProps.title, updates: [upd1, upd2], dlcs: [] }, installQueue: queue([]) });
   assert.match(html, /patch_v105_mod\.pkg/);
   assert.match(html, /\/usb0\/updates\/patch_v105_mod\.pkg/);
   assert.match(html, /patch_v105_orig\.pkg/);
@@ -132,10 +132,10 @@ test('TitleDetailView renders file name and path for updates (#24)', () => {
   assert.match(html, /<p class="truncate"><span class="text-zinc-300">patch_v105_mod\.pkg<\/span><\/p><p class="text-zinc-500 font-normal truncate mt-0.5">\(\/usb0\/updates\/patch_v105_mod\.pkg\)<\/p>/);
 });
 
-test('TitleDetailView renders file name, path, and other base packages (#27)', () => {
+test('TitleDetailView renders file name, path, and other base packages (#27) when enabled in settings', () => {
   const base1 = { path: 'smb://192.168.1.100/games/game_base_eu.pkg', filename: 'game_base_eu.pkg', app_version: '01.00', file_size: 2000, can_install: true };
   const base2 = { path: '/usb0/games/game_base_us.pkg', filename: 'game_base_us.pkg', app_version: '01.00', file_size: 2000, can_install: true };
-  const html = render(Detail, { ...detailProps, title: { ...detailProps.title, base: base1, bases: [base1, base2], updates: [], dlcs: [] }, installQueue: queue([]) });
+  const html = render(Detail, { ...detailProps, settings: { show_package_paths: true }, title: { ...detailProps.title, base: base1, bases: [base1, base2], updates: [], dlcs: [] }, installQueue: queue([]) });
   assert.match(html, /game_base_eu\.pkg/);
   assert.match(html, /smb:\/\/192\.168\.1\.100\/games\/game_base_eu\.pkg/);
   assert.match(html, /<p class="truncate"><span class="text-zinc-500 font-sans mr-1">Base:<\/span><span class="text-zinc-300">game_base_eu\.pkg<\/span><\/p><p class="text-zinc-500 font-normal truncate mt-0.5">\(smb:\/\/192\.168\.1\.100\/games\/game_base_eu\.pkg\)<\/p>/);
@@ -149,11 +149,20 @@ test('TitleDetailView renders file name, path, and other base packages (#27)', (
 test('TitleDetailView does not duplicate path on new line when filename and path are identical or filename missing', () => {
   const baseSame = { path: 'game_same.pkg', filename: 'game_same.pkg', app_version: '01.00', file_size: 2000, can_install: true };
   const updNoFilename = { path: '/usb0/updates/patch_v101.pkg', app_version: '01.01', file_size: 1000, can_install: true };
-  const html = render(Detail, { ...detailProps, title: { ...detailProps.title, base: baseSame, bases: [baseSame], updates: [updNoFilename], dlcs: [] }, installQueue: queue([]) });
+  const html = render(Detail, { ...detailProps, settings: { show_package_paths: true }, title: { ...detailProps.title, base: baseSame, bases: [baseSame], updates: [updNoFilename], dlcs: [] }, installQueue: queue([]) });
   assert.match(html, /game_same\.pkg/);
   assert.doesNotMatch(html, /\(game_same\.pkg\)/);
   assert.match(html, /\/usb0\/updates\/patch_v101\.pkg/);
   assert.doesNotMatch(html, /\(\/usb0\/updates\/patch_v101\.pkg\)/);
+});
+
+test('TitleDetailView hides file name and path by default when show_package_paths is disabled or omitted', () => {
+  const base1 = { path: '/usb0/games/game_base.pkg', filename: 'game_base.pkg', app_version: '01.00', file_size: 2000, can_install: true };
+  const upd1 = { path: '/usb0/updates/patch_v105_mod.pkg', filename: 'patch_v105_mod.pkg', app_version: '01.05', file_size: 1000, can_install: true };
+  const html = render(Detail, { ...detailProps, settings: {}, title: { ...detailProps.title, base: base1, bases: [base1], updates: [upd1], dlcs: [] }, installQueue: queue([]) });
+  assert.doesNotMatch(html, /game_base\.pkg/);
+  assert.doesNotMatch(html, /patch_v105_mod\.pkg/);
+  assert.doesNotMatch(html, /\/usb0\/updates\/patch_v105_mod\.pkg/);
 });
 
 const local = (id, titleId, kind, iconUrl) => ({ id, status: 'ready', file: { name: `${id}.pkg`, size: 100 }, iconUrl,

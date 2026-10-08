@@ -121,7 +121,7 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                       ) : null}
                     </div>
 
-                    {selectedTitle.base && (selectedTitle.base.filename || selectedTitle.base.path) && (
+                    {Boolean(settings?.show_package_paths) && selectedTitle.base && (selectedTitle.base.filename || selectedTitle.base.path) && (
                       <div className="w-full min-w-0 text-xs font-mono text-zinc-400 mt-2" title={selectedTitle.base.path || selectedTitle.base.filename}>
                         <p className="truncate">
                           <span className="text-zinc-500 font-sans mr-1">Base:</span>
@@ -338,7 +338,7 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                               )}
                             </div>
 
-                            {(pkg.filename || pkg.path) && (
+                            {Boolean(settings?.show_package_paths) && (pkg.filename || pkg.path) && (
                               <div className="text-xs font-mono text-zinc-400 mt-0.5 min-w-0" title={pkg.path || pkg.filename}>
                                 <p className="truncate">
                                   <span className="text-zinc-300">{pkg.filename || pkg.path}</span>
@@ -465,7 +465,7 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                               )}
                             </div>
 
-                            {(pkg.filename || pkg.path) && (
+                            {Boolean(settings?.show_package_paths) && (pkg.filename || pkg.path) && (
                               <div className="text-xs font-mono text-zinc-400 mt-0.5 min-w-0" title={pkg.path || pkg.filename}>
                                 <p className="truncate">
                                   <span className="text-zinc-300">{pkg.filename || pkg.path}</span>
