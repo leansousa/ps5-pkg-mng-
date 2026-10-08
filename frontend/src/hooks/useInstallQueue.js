@@ -5,7 +5,7 @@ import { checkUploadEligibility } from '../api/directInstall';
 import { parseLocalPkg } from '../utils/parseLocalPkg';
 import { fileKey, pendingStates, terminalStates, queueOverview, orderBrowserFiles, canQueueBrowserFile } from '../utils/installQueue';
 import { useWakeLock } from './useWakeLock';
-import { getBrowserTitle } from '../utils/title';
+import { getBrowserTitle, formatInstallTitle } from '../utils/title';
 
 export function useInstallQueue(upload, { showToast, onResolved, appVersion }) {
   const [snapshot, setSnapshot] = useState({ jobs: [], active_id: 0 });
@@ -99,10 +99,31 @@ export function useInstallQueue(upload, { showToast, onResolved, appVersion }) {
   }, [refresh]);
 
   useEffect(() => {
-    if (!overview.pending.length) return undefined;
-    document.title = `${overview.percent === null ? '(Installing)' : `(${Math.floor(overview.percent)}%)`} ${getBrowserTitle(appVersion)}`;
+    const active = snapshot.jobs.find((job) => job.id === snapshot.active_id) ||
+      snapshot.jobs.find((job) => ['installing', 'preparing'].includes(job.state));
+    const isInstalling = Boolean(active && (active.state === 'installing' || active.state === 'preparing'));
+
+    if (!isInstalling) {
+      document.title = getBrowserTitle(appVersion);
+      return undefined;
+    }
+
+    const currentRun = Math.max(0, ...snapshot.jobs.map((j) => j.run_id || 0));
+    const batchJobs = snapshot.jobs.filter((j) => (j.run_id || 0) === currentRun && j.state !== 'canceled');
+    const resolvedInBatch = batchJobs.filter((j) => terminalStates.has(j.state)).length;
+    const totalCount = batchJobs.length;
+    const currentIndex = Math.min(totalCount, resolvedInBatch + 1);
+
+    document.title = formatInstallTitle({
+      activeJob: active,
+      totalCount,
+      currentIndex,
+      speed: rate.current.speed,
+      appVersion,
+    });
+
     return () => { document.title = getBrowserTitle(appVersion); };
-  }, [overview.pending.length, overview.percent, appVersion]);
+  }, [snapshot, appVersion]);
 
   useEffect(() => () => {
     filesRef.current.forEach((file) => { if (file.iconUrl) URL.revokeObjectURL(file.iconUrl); });

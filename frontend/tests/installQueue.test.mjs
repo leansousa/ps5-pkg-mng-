@@ -6,6 +6,7 @@ import { build } from 'esbuild';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { canQueuePackage, canQueueBrowserFile, queueOverview, orderBrowserFiles } from '../src/utils/installQueue.js';
+import { makeTextProgressBar, formatInstallTitle, getBrowserTitle } from '../src/utils/title.js';
 
 const require = createRequire(import.meta.url);
 async function component(path) {
@@ -290,3 +291,78 @@ test('InstallQueueView renders All Done chip with right queue list and Clear com
   assert.match(html, /Game 2/);
   assert.match(html, /Clear completed/);
 });
+
+test('makeTextProgressBar generates 10-character block progress bar', () => {
+  assert.equal(makeTextProgressBar(0), '[□□□□□□□□□□]');
+  assert.equal(makeTextProgressBar(50), '[■■■■■□□□□□]');
+  assert.equal(makeTextProgressBar(100), '[■■■■■■■■■■]');
+});
+
+test('formatInstallTitle displays detailed title with pseudo progress bar on PS5 when installing', () => {
+  const activeJob = {
+    state: 'installing',
+    title_name: 'Sample Game',
+    progress: 45,
+    downloaded_bytes: 450 * 1024 * 1024,
+    total_bytes: 1000 * 1024 * 1024,
+  };
+  const title = formatInstallTitle({
+    activeJob,
+    totalCount: 3,
+    currentIndex: 1,
+    speed: 10 * 1024 * 1024,
+    appVersion: '1.4.1',
+    onPS5: true,
+  });
+  assert.match(title, /\[■■■■■□□□□□\]/);
+  assert.match(title, /45%/);
+  assert.match(title, /\[1\/3\]/);
+  assert.match(title, /Sample Game/);
+  assert.match(title, /10 MB\/s/);
+  assert.doesNotMatch(title, /PKG Manager/);
+});
+
+test('formatInstallTitle truncates package names longer than 40 chars to 37 + ...', () => {
+  const longName = 'Sample Role Playing Game - Deluxe Extended Edition';
+  const activeJob = {
+    state: 'installing',
+    title_name: longName,
+    progress: 20,
+    downloaded_bytes: 200 * 1024 * 1024,
+    total_bytes: 1000 * 1024 * 1024,
+  };
+  const title = formatInstallTitle({
+    activeJob,
+    totalCount: 1,
+    currentIndex: 1,
+    speed: 10 * 1024 * 1024,
+    appVersion: '1.4.1',
+    onPS5: true,
+  });
+  const expectedName = `${longName.slice(0, 37)}...`;
+  assert.equal(expectedName.length, 40);
+  assert.match(title, new RegExp(expectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.doesNotMatch(title, /PKG Manager/);
+});
+
+test('formatInstallTitle displays default regular title when nothing is currently installing', () => {
+  const blockedJob = { state: 'blocked', title_name: 'DLC 1', progress: 0 };
+  const title = formatInstallTitle({
+    activeJob: blockedJob,
+    appVersion: '1.4.1',
+    onPS5: true,
+  });
+  assert.equal(title, getBrowserTitle('1.4.1'));
+  assert.doesNotMatch(title, /\[■/);
+});
+
+test('formatInstallTitle on desktop keeps compact percentage in title when installing', () => {
+  const activeJob = { state: 'installing', title_name: 'Game', progress: 60 };
+  const title = formatInstallTitle({
+    activeJob,
+    appVersion: '1.4.1',
+    onPS5: false,
+  });
+  assert.match(title, /^\(60%\) PKG Manager/);
+});
+
