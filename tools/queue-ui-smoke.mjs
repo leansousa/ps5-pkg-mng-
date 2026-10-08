@@ -191,7 +191,7 @@ try {
   await evaluate('window.smokeFailPolls = false');
   await wait(async () => (await jobs()).some((job) => job.title_name === 'Browser Smoke' && job.state === 'installing'), 'backend-selected browser upload', 25000);
   assert.equal(await button('Open install queue'), true);
-  await wait(async () => evaluate(`(() => { const row = [...document.querySelectorAll('#install-queue-panel article')].find((row) => row.querySelector('h2, h3, h4')?.textContent === 'Browser Smoke'); const image = row?.querySelector('img'); return image?.src.startsWith('blob:') && image.naturalWidth === 256 && row.innerText.includes('Installing') && row.innerText.split('Browser Smoke').length >= 2 && !row.innerText.includes('Installing package'); })()`), 'queue uses local thumbnail and concise install status');
+  await wait(async () => evaluate(`(() => { const row = [...document.querySelectorAll('#install-queue-panel article')].find((row) => row.querySelector('h2, h3, h4')?.textContent === 'Browser Smoke'); const image = row?.querySelector('img'); return image?.src.startsWith('blob:') && image.naturalWidth === 256 && row.innerText.includes('Install') && row.innerText.split('Browser Smoke').length >= 2 && !row.innerText.includes('Installing package'); })()`), 'queue uses local thumbnail and concise install status');
   const browserQueueScreenshot = await command('Page.captureScreenshot', { format: 'png' });
   await writeFile(path.join(tmpdir(), 'pkg-queue-with-browser.png'), Buffer.from(browserQueueScreenshot.data, 'base64'));
   await closeQueue();

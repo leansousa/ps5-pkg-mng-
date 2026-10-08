@@ -223,6 +223,17 @@ int main(void) {
         finish(1); wait_state(ids[1], "completed");
     }
 
+    /* Redundant non-browser package (already installed) cancels immediately instead of blocking */
+    reset();
+    installed = 1;
+    snprintf(refused_title, sizeof(refused_title), "PPSA0000A");
+    snprintf(refusal, sizeof(refusal), "DLC is already installed");
+    install_queue_request_t redundant_file[] = {request("/A/redundant_dlc"), request("/B/base")};
+    assert(install_queue_add(redundant_file, 2, ids) == 0);
+    wait_state(ids[0], "canceled");
+    wait_state(ids[1], "installing");
+    finish(1); wait_state(ids[1], "completed");
+
     reset();
     size_t count;
     assert(install_queue_add_json("{\"jobs\":[{\"path\":\"/A/base\"},{\"path\":\"live:bad\"}]}", ids, &count) != 0);
@@ -363,6 +374,12 @@ int main(void) {
     install_queue_clear_finished();
     wait_state(multi_ids[0], "missing");
     wait_state(multi_ids[2], "missing");
+
+    /* Dependent package without base installed or queued is canceled, not looped */
+    reset();
+    install_queue_request_t orphan = request("/A/update");
+    assert(install_queue_add(&orphan, 1, ids) == 0);
+    wait_state(ids[0], "canceled");
 
     /* TTL = 0 clears terminal jobs immediately on next tick */
     reset();

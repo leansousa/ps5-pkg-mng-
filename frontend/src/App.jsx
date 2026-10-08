@@ -788,52 +788,54 @@ export default function App() {
         aria-hidden={isAnyModalOpen ? 'true' : undefined}
         className={`border-0 m-0 p-0 min-w-0 w-full flex flex-col flex-1 ${isAnyModalOpen ? 'pointer-events-none select-none' : ''}`}
       >
-        <Header
-        appVersion={appVersion}
-        queueOverview={installQueue.overview}
-        queueOpen={showQueue}
-        onQueueClick={() => {
-          if (showQueue) {
-            handleCloseQueue();
-            return;
-          }
-          handleOpenQueue();
-        }}
-        storage={storage}
-        showSettings={showSettings}
-        showSmbPage={showSmbPage}
-        onSettingsClick={() => {
-          if (showDirectInstall) {
-            setShowDirectInstall(false);
-          }
-          if (showQueue) {
-            handleCloseQueue();
-            return;
-          }
-          if (showSmbPage) {
-            handleCloseSmb();
-            return;
-          }
-          if (showSettings) {
-            handleCloseSettings();
-            return;
-          }
-          handleOpenSettings();
-        }}
-        onRescan={handleQuickRescan}
-        refreshing={refreshing}
-        selectedDrive={selectedDrive}
-        onBackToDrives={handleBackToDrives}
-      />
-
-      {/* Main Container */}
-      <main className="w-full px-4 py-4 flex-1 space-y-6">
-        {showQueue ? (
-          <InstallQueueView
-            queue={installQueue}
-            onBack={handleCloseQueue}
-            debugEnabled={Boolean(settings.pkg_install_debug)}
+        {!showQueue && (
+          <Header
+            appVersion={appVersion}
+            queueOverview={installQueue.overview}
+            queueOpen={showQueue}
+            onQueueClick={() => {
+              if (showQueue) {
+                handleCloseQueue();
+                return;
+              }
+              handleOpenQueue();
+            }}
+            storage={storage}
+            showSettings={showSettings}
+            showSmbPage={showSmbPage}
+            onSettingsClick={() => {
+              if (showDirectInstall) {
+                setShowDirectInstall(false);
+              }
+              if (showQueue) {
+                handleCloseQueue();
+                return;
+              }
+              if (showSmbPage) {
+                handleCloseSmb();
+                return;
+              }
+              if (showSettings) {
+                handleCloseSettings();
+                return;
+              }
+              handleOpenSettings();
+            }}
+            onRescan={handleQuickRescan}
+            refreshing={refreshing}
+            selectedDrive={selectedDrive}
+            onBackToDrives={handleBackToDrives}
           />
+        )}
+
+        {/* Main Container */}
+        <main className={`w-full flex-1 ${showQueue ? 'px-4 sm:px-8 py-3 flex flex-col min-h-0' : 'px-4 py-4 space-y-6'}`}>
+          {showQueue ? (
+            <InstallQueueView
+              queue={installQueue}
+              onBack={handleCloseQueue}
+              debugEnabled={Boolean(settings.pkg_install_debug)}
+            />
         ) : showDirectInstall ? (
           <DirectInstallView
             onBack={handleCloseDirectInstall}
@@ -952,7 +954,7 @@ export default function App() {
         )}
       </main>
 
-      <Footer appVersion={appVersion} />
+      {!showQueue && <Footer appVersion={appVersion} />}
       </fieldset>
 
       <DonateModal

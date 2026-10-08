@@ -19,17 +19,20 @@ export function orderBrowserFiles(files) {
 }
 
 export function queueOverview(jobs) {
-  const pending = jobs.filter((job) => pendingStates.has(job.state));
+  const visible = jobs.filter((job) => job.state !== 'canceled');
+  const pending = visible.filter((job) => pendingStates.has(job.state));
   const active = pending.find((job) => ['checking', 'preparing', 'installing', 'canceling'].includes(job.state));
-  const run = Math.max(0, ...jobs.map((job) => job.run_id || 0));
-  const members = jobs.filter((job) => (job.run_id || 0) === run);
+  const run = Math.max(0, ...visible.map((job) => job.run_id || 0));
+  const members = visible.filter((job) => (job.run_id || 0) === run);
   const total = members.reduce((sum, job) => sum + job.total_bytes, 0);
-  const resolved = jobs.filter((job) => terminalStates.has(job.state));
+  const resolved = visible.filter((job) => terminalStates.has(job.state));
   const bytes = members.reduce((sum, job) => sum + (terminalStates.has(job.state) ? job.total_bytes :
     job.state === 'installing' ? Math.min(job.total_bytes, job.downloaded_bytes) : 0), 0);
   const indeterminate = Boolean(active?.is_direct_storage || active?.state === 'preparing' || active?.waiting_for_disc);
-  return { pending, active, resolved: resolved.length, count: jobs.length,
-    submitted: jobs.filter((job) => job.state === 'submitted').length,
+  return { pending, active, resolved: resolved.length, count: visible.length,
+    runCount: members.length,
+    runResolved: members.filter((job) => terminalStates.has(job.state)).length,
+    submitted: visible.filter((job) => job.state === 'submitted').length,
     percent: !indeterminate && total > 0 ? Math.min(100, bytes / total * 100) : null };
 }
 

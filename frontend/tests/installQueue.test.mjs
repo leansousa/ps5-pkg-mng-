@@ -215,20 +215,25 @@ test('InstallQueueView implements Option A layout with active install hero and t
   ];
   const q = { ...queue(jobs), installSpeed: 10 * 1024 * 1024 };
   const html = render(QueueView, { queue: q, onBack() {} });
-  // Option A structure:
-  // Back button and breadcrumbs
+  // Minimalist top bar:
+  // Back button
   assert.match(html, /Back<\/span>/);
-  assert.match(html, /PKG Manager/);
+  // Install Queue heading on right column
   assert.match(html, /Install Queue/);
   // Active Hero section (left column)
   assert.match(html, /Package 1/);
   assert.match(html, /Current item progress/);
   assert.match(html, /40\.0% · 40 B \/ 100 B/);
-  // Total queue progress bar directly underneath current item progress bar (when >1 jobs)
+  // Speed and remaining time on new line
+  assert.match(html, /10 MB\/s/);
+  assert.match(html, /Remaining:\s*\d+[smh]/);
+  assert.doesNotMatch(html, /Remaining:\s*[^<]*remaining/i);
+  assert.doesNotMatch(html, /Total remaining:\s*[^<]*remaining/i);
+  // Total queue progress bar directly underneath current item progress bar with "1/2"
   assert.match(html, /Total queue progress/);
+  assert.match(html, /1\/2/);
   assert.match(html, /Overall queue progress/);
   // Queue list items (right column)
-  assert.match(html, /Queue Items/);
   assert.match(html, /Package 2/);
   // Cancel and remove actions
   assert.match(html, /Cancel install/);
@@ -248,8 +253,40 @@ test('InstallQueueView with a single job only renders current item progress with
   assert.doesNotMatch(html, /Total queue progress/);
 });
 
-test('InstallQueueView shows Clear finished entries button when completed/aborted jobs exist', () => {
+test('InstallQueueView shows Clear completed button when completed/aborted jobs exist', () => {
   const jobs = [job(1, 'completed'), job(2, 'aborted', { error: 'Installed version is same or newer' })];
   const html = render(QueueView, { queue: queue(jobs), onBack() {} });
-  assert.match(html, /Clear finished entries/);
+  assert.match(html, /Clear completed/);
+});
+
+test('InstallQueueView renders checkmark for completed items in the queue list', () => {
+  const jobs = [
+    job(1, 'installing', { downloaded_bytes: 40, total_bytes: 100, progress: 40, run_id: 1 }),
+    job(2, 'completed', { run_id: 1 }),
+  ];
+  const html = render(QueueView, { queue: queue(jobs), onBack() {} });
+  assert.match(html, /aria-label="Installed"/);
+  assert.match(html, /points="20 6 9 17 4 12"/);
+});
+
+test('InstallQueueView renders package hero with All Done chip when single job is completed', () => {
+  const jobs = [job(1, 'completed', { title_name: 'Sample Game' })];
+  const html = render(QueueView, { queue: queue(jobs), onBack() {} });
+  assert.match(html, /All Done!/);
+  assert.match(html, /Sample Game/);
+  assert.match(html, /Current item progress/);
+  assert.match(html, /Browse Packages/);
+  assert.doesNotMatch(html, /Clear completed/);
+});
+
+test('InstallQueueView renders All Done chip with right queue list and Clear completed when multiple jobs are completed', () => {
+  const jobs = [
+    job(1, 'completed', { title_name: 'Game 1' }),
+    job(2, 'completed', { title_name: 'Game 2' }),
+  ];
+  const html = render(QueueView, { queue: queue(jobs), onBack() {} });
+  assert.match(html, /All Done!/);
+  assert.match(html, /Game 1/);
+  assert.match(html, /Game 2/);
+  assert.match(html, /Clear completed/);
 });

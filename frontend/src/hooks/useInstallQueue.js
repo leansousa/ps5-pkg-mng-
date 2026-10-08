@@ -220,7 +220,19 @@ export function useInstallQueue(upload, { showToast, onResolved, appVersion }) {
     setSkipped([]);
   }, [filePending]);
 
+  const cancel = useCallback((job) => {
+    if (!job) return;
+    const active = ['checking', 'preparing', 'installing', 'canceling'].includes(job.state);
+    if (!active) {
+      setSnapshot((prev) => ({
+        ...prev,
+        jobs: prev.jobs.filter((j) => j.id !== job.id)
+      }));
+    }
+    return perform(() => cancelQueueJob(job.id));
+  }, [perform]);
+
   return { ...snapshot, connected, overview, files, skipped, uploadSpeed: upload.uploadSpeed, installSpeed: rate.current.speed, addFiles, removeFile, clearFiles, enqueueFiles, enqueuePackages,
-    cancel: (job) => perform(() => cancelQueueJob(job.id)), retry,
+    cancel, retry,
     clearFinished: () => perform(clearFinishedJobs), refresh, sourceId: owner.slice(0, 16) };
 }

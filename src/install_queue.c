@@ -111,6 +111,9 @@ static void revalidate_dependents(const char *title_id) {
         if (!installed && !earlier_base(job, offline && !job->request.owner[0])) {
             job->state = QUEUE_BLOCKED;
             snprintf(job->error, sizeof(job->error), "Base is not installed or queued before this package");
+        } else if (job->state == QUEUE_BLOCKED) {
+            job->state = QUEUE_QUEUED;
+            job->error[0] = 0;
         }
     }
     pthread_mutex_unlock(&mutex);
@@ -507,10 +510,8 @@ static void tick(void) {
     for (size_t i = 0; i < INSTALL_QUEUE_MAX_JOBS; i++) {
         queue_job_t *job = &jobs[i];
         if (!job->id) continue;
-        if ((job->state == QUEUE_QUEUED || (job->state == QUEUE_BLOCKED && time(NULL) - job->checked >= 3)) && (!next || job->order < next->order)) next = job;
+        if (job->state == QUEUE_QUEUED && (!next || job->order < next->order)) next = job;
     }
-    /* Each blocked entry is checked at most once every three seconds,
-     * leaving intervening ticks available for later ready jobs. */
     if (next) { snapshot = *next; next->state = QUEUE_CHECKING; next->selected = next->checked = time(NULL); active_id = next->id; }
     pthread_mutex_unlock(&mutex);
     if (!snapshot.id) return;
@@ -544,13 +545,8 @@ static void tick(void) {
          strstr(eligibility.disabled_reason, "Base package installation was aborted") ||
          (submitting_dependency && strstr(eligibility.disabled_reason, "Leftovers detected")));
     if (parse_rc || missing_base || (!eligibility.can_install && !(base_ready && base_reason))) {
-        int redundant_browser_package = snapshot.request.owner[0] && !missing_base && eligibility.disabled_reason &&
-            (!strcmp(eligibility.disabled_reason, "Installed version is same or newer") ||
-             !strcmp(eligibility.disabled_reason, "Application is already installed") ||
-             !strcmp(eligibility.disabled_reason, "DLC is already installed"));
-        /* This package no longer needs installing. Finish it once rather than
-         * rechecking it as a blocked dependency or asking its tab to upload it. */
-        active->state = parse_rc ? QUEUE_FAILED : redundant_browser_package ? QUEUE_ABORTED : QUEUE_BLOCKED;
+        active->state = parse_rc ? QUEUE_FAILED :
+                        snapshot.request.owner[0] ? QUEUE_ABORTED : QUEUE_CANCELED;
         snprintf(active->error, sizeof(active->error), "%s", parse_rc ? "Package source unavailable or unreadable. Reconnect the drive/share and retry." :
                  missing_base ? "Base is not installed or queued before this package" : eligibility.disabled_reason);
         if (!pending(active->state)) active->finished = time(NULL);
