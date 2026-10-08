@@ -180,11 +180,13 @@ test('direct packages remain separate cards with local thumbnails and platform/t
   assert.match(html, />dlc<\/span>/);
 });
 
-test('Clear files is disabled when every local source is still needed by the queue', () => {
-  const props = { queue: { ...queue([job(1, 'installing', { file_key: 'base', source_id: 'browser' }), job(2, 'blocked', { file_key: 'dlc', source_id: 'browser' })]),
-    sourceId: 'browser', skipped: [], files: [local('base', 'PPSA00001', 'base'), local('dlc', 'PPSA00001', 'dlc')] } };
-  assert.match(render(Direct, props), /<button[^>]*disabled=""[^>]*>Clear files<\/button>/);
-  assert.doesNotMatch(render(Direct, { queue: { ...props.queue, files: [...props.queue.files, local('spare', 'CUSA00002', 'base')] } }), /<button[^>]*disabled=""[^>]*>Clear files<\/button>/);
+test('Direct Install provides Choose packages and Install all actions without Choose folder or Clear files', () => {
+  const props = { queue: { ...queue([]), sourceId: 'browser', skipped: [], files: [local('base', 'PPSA00001', 'base')] } };
+  const html = render(Direct, props);
+  assert.match(html, />Choose packages<\/button>/);
+  assert.match(html, />Install all \(1\)<\/button>/);
+  assert.doesNotMatch(html, />Choose folder<\/button>/);
+  assert.doesNotMatch(html, />Clear files<\/button>/);
 });
 
 test('Direct Install excludes redundant versions and installed DLC from individual and bulk queue actions', () => {
@@ -192,8 +194,9 @@ test('Direct Install excludes redundant versions and installed DLC from individu
   files.forEach((file) => { file.eligibility = { can_install: false, install_disabled_reason: file.id === 'dlc' ? 'DLC is already installed' : 'Installed version is same or newer' }; });
   for (const file of files) assert.equal(canQueueBrowserFile(file, [job(1, 'queued', { title_id: file.details.title_id })], 'browser', files), false);
   const html = render(Direct, { queue: { ...queue([]), sourceId: 'browser', skipped: [], files } });
-  assert.match(html, /<button[^>]*disabled=""[^>]*>Queue all \(0\)<\/button>/);
-  assert.equal((html.match(/<button[^>]*disabled=""[^>]*>Queue<\/button>/g) || []).length, 3);
+  assert.match(html, /<button[^>]*disabled=""[^>]*>Install all \(0\)<\/button>/);
+  assert.equal((html.match(/<button[^>]*disabled=""[^>]*>Install<\/button>/g) || []).length, 3);
+  assert.equal((html.match(/<button[^>]*>Cancel<\/button>/g) || []).length, 3);
   assert.match(html, /Not installable/);
 });
 

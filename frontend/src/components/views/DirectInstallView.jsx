@@ -7,11 +7,9 @@ import PackageThumbnail from '../PackageThumbnail';
 
 export default function DirectInstallView({ queue, onBack, onOpenQueue }) {
   const input = useRef(null);
-  const folders = useRef(null);
   const [reading, setReading] = useState(false);
   const ownJob = (local) => [...queue.jobs].reverse().find((job) => job.file_key === local.id && job.source_id === queue.sourceId);
   const ready = queue.files.filter((local) => canQueueBrowserFile(local, queue.jobs, queue.sourceId, queue.files));
-  const clearable = queue.files.some((local) => !pendingStates.has(ownJob(local)?.state));
   const collect = async (selection, dropped) => {
     setReading(true);
     try {
@@ -30,21 +28,17 @@ export default function DirectInstallView({ queue, onBack, onOpenQueue }) {
       </div>
       <div className="border border-dashed border-white/20 bg-white/5 p-6 space-y-3 rounded-[2px]">
         <h2 className="text-xl font-bold">Direct Install</h2>
-        <p className="text-sm text-zinc-300">Choose or drop PKG files and folders. Keep this tab open while its queued packages stream to your PS5. You can browse the app during installation.</p>
+        <p className="text-sm text-zinc-300">Choose or drop PKG files. Keep this tab open while its queued packages stream to your PS5. You can browse the app during installation.</p>
         <div className="flex flex-wrap gap-3">
           <button type="button" onClick={() => input.current.click()} className="ps5-focus-item px-4 py-2 bg-white/10 rounded-[2px]">Choose packages</button>
-          <button type="button" onClick={() => folders.current.click()} className="ps5-focus-item px-4 py-2 bg-white/10 rounded-[2px]">Choose folder</button>
-          <button type="button" disabled={!ready.length || !queue.connected} onClick={() => queue.enqueueFiles(ready.map((local) => local.id))} className="ps5-focus-item px-4 py-2 bg-blue-600 disabled:opacity-40 rounded-[2px]">Queue all ({ready.length})</button>
-          <button type="button" disabled={!clearable && !queue.skipped.length} onClick={queue.clearFiles} title="Remove files that are not active or queued" className="ps5-focus-item px-4 py-2 bg-white/10 disabled:opacity-40 rounded-[2px]">Clear files</button>
+          <button type="button" disabled={!ready.length || !queue.connected} onClick={() => queue.enqueueFiles(ready.map((local) => local.id))} className="ps5-focus-item px-4 py-2 bg-blue-600 disabled:opacity-40 rounded-[2px]">Install all ({ready.length})</button>
         </div>
         <input ref={input} type="file" multiple accept=".pkg" className="hidden" onChange={(event) => { collect(event.target.files, false); event.target.value = ''; }} />
-        <input ref={folders} type="file" multiple webkitdirectory="" directory="" className="hidden" onChange={(event) => { collect(event.target.files, false); event.target.value = ''; }} />
         {reading && <p className="text-sm text-blue-300">Reading packages…</p>}
       </div>
       {queue.skipped.length > 0 && <p className="text-sm text-amber-300">{queue.skipped.length} unreadable file(s) skipped.</p>}
       {queue.files.length > 0 && <div className="flex flex-wrap justify-between gap-2 text-xs text-zinc-400">
-        <span>{queue.files.length} package{queue.files.length === 1 ? '' : 's'} · {ready.length} ready to queue</span>
-        <span>Clear files keeps active and queued packages.</span>
+        <span>{queue.files.length} package{queue.files.length === 1 ? '' : 's'} · {ready.length} ready to install</span>
       </div>}
       <div aria-label="Selected packages" className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
         {queue.files.map((local) => {
@@ -76,8 +70,8 @@ export default function DirectInstallView({ queue, onBack, onOpenQueue }) {
                 {problem && <p className="text-xs text-amber-300 break-words">{problem}</p>}
               </div>
               <div className="flex flex-wrap gap-2">
-                <button type="button" disabled={!queue.connected || (pending ? !canCancel : !canQueue)} onClick={() => pending ? queue.cancel(job) : queue.enqueueFiles([local.id])} className="ps5-focus-item flex-1 text-xs px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded-[2px]">{job?.state === 'completed' ? 'Installed' : pending ? ['queued', 'blocked'].includes(job.state) ? 'Unqueue' : 'Cancel install' : 'Queue'}</button>
-                <button type="button" disabled={Boolean(pending)} onClick={() => queue.removeFile(local.id)} className="ps5-focus-item text-xs px-3 py-2 bg-white/10 hover:bg-white/20 disabled:opacity-40 rounded-[2px]">Remove file</button>
+                <button type="button" disabled={!queue.connected || (pending ? !canCancel : !canQueue)} onClick={() => pending ? queue.cancel(job) : queue.enqueueFiles([local.id])} className="ps5-focus-item flex-1 text-xs px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded-[2px]">{job?.state === 'completed' ? 'Installed' : pending ? ['queued', 'blocked'].includes(job.state) ? 'Unqueue' : 'Cancel install' : 'Install'}</button>
+                <button type="button" disabled={Boolean(pending)} onClick={() => queue.removeFile(local.id)} className="ps5-focus-item text-xs px-3 py-2 bg-white/10 hover:bg-white/20 disabled:opacity-40 rounded-[2px]">Cancel</button>
               </div>
             </article>
           );
