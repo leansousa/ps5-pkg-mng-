@@ -55,7 +55,8 @@ static void evaluate_install_eligibility(const pkg_detail_t *pkg, int is_install
             out->disabled_reason = partial
                 ? "Base package installation was aborted. Reinstall base package first."
                 : "Base package is not installed";
-        } else if (pkg->pkg_type == PKG_TYPE_UPDATE && out->installed_version[0] &&
+        } else if (pkg->pkg_type == PKG_TYPE_UPDATE &&
+                   out->installed_version[0] &&
                    pkg->app_version[0] &&
                    app_info_compare_versions(out->installed_version, pkg->app_version) >= 0) {
             out->can_install = 0;

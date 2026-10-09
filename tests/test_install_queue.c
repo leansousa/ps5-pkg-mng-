@@ -26,6 +26,7 @@ int installer_is_busy(void) { pthread_mutex_lock(&engine_mutex); int result = bu
 void installer_get_status(installer_status_t *out) { pthread_mutex_lock(&engine_mutex); *out = status; pthread_mutex_unlock(&engine_mutex); }
 int installer_is_network_connected(void) { return !offline; }
 int installer_start(const char *path) {
+    if (strstr(path, "unreadable")) return -4;
     pthread_mutex_lock(&engine_mutex);
     assert(!busy);
     memset(&status, 0, sizeof(status));
@@ -53,10 +54,20 @@ int installer_cancel_path(const char *path) {
 }
 
 int app_info_check_installed(const char *id, char *version, size_t capacity) { (void)id; (void)version; (void)capacity; return installed; }
-int pkg_scanner_find_by_path(const char *path, pkg_detail_t *pkg) { (void)path; (void)pkg; return -1; }
+int pkg_scanner_find_by_path(const char *path, pkg_detail_t *pkg) {
+    if (!strstr(path, "cached-backport")) return -1;
+    memset(pkg, 0, sizeof(*pkg));
+    snprintf(pkg->path, sizeof(pkg->path), "%s", path);
+    snprintf(pkg->title_id, sizeof(pkg->title_id), "PPSA0000A");
+    snprintf(pkg->title_name, sizeof(pkg->title_name), "Game A");
+    snprintf(pkg->pkg_type_str, sizeof(pkg->pkg_type_str), "backport");
+    pkg->pkg_type = PKG_TYPE_BACKPORT;
+    pkg->file_size = pkg->total_pkg_size = 100;
+    return 0;
+}
 int pkg_parser_parse(const char *path, pkg_detail_t *pkg) {
     if (strstr(path, "slow")) usleep(300000);
-    if (strstr(path, "missing")) return -1;
+    if (strstr(path, "missing") || strstr(path, "cached-backport") || strstr(path, "unreadable")) return -1;
     memset(pkg, 0, sizeof(*pkg));
     snprintf(pkg->title_id, sizeof(pkg->title_id), "PPSA0000%c", path[1]);
     snprintf(pkg->title_name, sizeof(pkg->title_name), "Game %c", path[1]);
@@ -185,6 +196,31 @@ int main(void) {
     assert(install_queue_add(unavailable, 2, ids) == 0);
     wait_state(ids[0], "failed"); wait_state(ids[1], "installing");
     finish(1); wait_state(ids[1], "completed");
+
+    /* A backport already parsed by the scanner should dispatch without
+     * reparsing its removable source. */
+    reset();
+    installed = 1;
+    install_queue_request_t cached_backport = {0};
+    snprintf(cached_backport.path, sizeof(cached_backport.path), "/A/cached-backport.pkg");
+    snprintf(cached_backport.title_id, sizeof(cached_backport.title_id), "PPSA0000A");
+    snprintf(cached_backport.title_name, sizeof(cached_backport.title_name), "Game A");
+    snprintf(cached_backport.kind, sizeof(cached_backport.kind), "backport");
+    cached_backport.total_bytes = 100;
+    assert(install_queue_add(&cached_backport, 1, ids) == 0);
+    wait_state(ids[0], "installing");
+    assert(started_count() == 1 && !strcmp(paths[0], "/A/cached-backport.pkg"));
+    finish(1); wait_state(ids[0], "completed");
+
+    /* If the source reparse fails and the scanner cache has gone away, use
+     * the package metadata submitted with the queue entry; installer_start
+     * remains responsible for rejecting a missing or unreadable source. */
+    reset();
+    installed = 1;
+    snprintf(cached_backport.path, sizeof(cached_backport.path), "/A/unreadable-backport.pkg");
+    assert(install_queue_add(&cached_backport, 1, ids) == 0);
+    wait_state(ids[0], "failed");
+    assert(started_count() == 0);
 
     reset();
     install_queue_request_t browser = {0};

@@ -53,7 +53,11 @@ export function useInstallQueue(upload, { showToast, onResolved, appVersion }) {
         }
         if (before && before !== job.state && terminalStates.has(job.state)) {
           latest.current.showToast(`${job.title_name || job.path || 'Package'}: ${job.state === 'submitted' ? 'submitted to PS5' : job.state}`, job.state === 'failed' ? 'error' : 'info');
-          latest.current.onResolved?.();
+          latest.current.onResolved?.(job);
+        } else if (!before &&
+          (job.state === 'completed' || job.state === 'submitted') &&
+          job.kind === 'backport') {
+          latest.current.onResolved?.(job);
         }
         seen.current.set(job.id, job.state);
       }

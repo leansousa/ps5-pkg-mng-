@@ -1,16 +1,8 @@
 import assert from 'node:assert/strict';
 import {
   getBackportTitleId,
-  getLinkedBackports,
-  isBackportInstalled,
-  markBackportInstalled
+  getLinkedBackports
 } from '../src/utils/backports.js';
-
-const storage = new Map();
-globalThis.localStorage = {
-  getItem: (key) => storage.get(key) || null,
-  setItem: (key, value) => storage.set(key, value)
-};
 
 const base = {
   filename: 'PPSA05144.pkg',
@@ -39,9 +31,4 @@ assert.deepEqual(getLinkedBackports(
   []
 ), []);
 
-assert.equal(isBackportInstalled(backport), false);
-assert.equal(markBackportInstalled(backport), true);
-assert.equal(isBackportInstalled(backport), true);
-assert.equal(isBackportInstalled({ ...backport, file_size: 1 }), false);
-
-console.log('backports: filename detection, association, installation state, and source isolation passed');
+console.log('backports: filename detection and source association passed');

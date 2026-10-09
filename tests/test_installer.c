@@ -577,6 +577,8 @@ int main(void) {
     assert(installer_is_nospace_error((int)0x80B21104u) == 1);
     assert(installer_is_nospace_error((int)0x80A30002u) == 1);
     assert(installer_is_nospace_error((int)0x80B21121u) == 0);
+    assert(strcmp(installer_strerror((int)0x80B21605u),
+                  "SCE_PLAYGO_ERROR_CORE_INVALID_DELTA_VERSION") == 0);
 
     setenv("PKG_TEST_SIMULATE_0x80B21104", "1", 1);
     res = installer_init("http://127.0.0.1:8085/");

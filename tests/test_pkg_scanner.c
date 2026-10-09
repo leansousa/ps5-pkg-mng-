@@ -173,6 +173,14 @@ int main(void) {
     pkg_scanner_check_install_eligibility(&direct_pkg, &eligibility);
     assert(eligibility.can_install);
 
+    direct_pkg.pkg_type = PKG_TYPE_BACKPORT;
+    snprintf(direct_pkg.app_version, sizeof(direct_pkg.app_version), "v1.00");
+    pkg_scanner_check_install_eligibility(&direct_pkg, &eligibility);
+    assert(eligibility.can_install);
+    snprintf(direct_pkg.app_version, sizeof(direct_pkg.app_version), "v1.06");
+    pkg_scanner_check_install_eligibility(&direct_pkg, &eligibility);
+    assert(eligibility.can_install);
+
     snprintf(direct_pkg.title_id, sizeof(direct_pkg.title_id), "CUSA90099");
     pkg_scanner_check_install_eligibility(&direct_pkg, &eligibility);
     assert(!eligibility.can_install);

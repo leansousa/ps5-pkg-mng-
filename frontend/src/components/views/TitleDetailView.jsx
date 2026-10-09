@@ -533,7 +533,7 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                     const requiredSpace = Number(pkg.total_pkg_size || pkg.file_size) || 0;
                     const maxAvailable = maxAvailableFor(pkg.title_id || selectedTitle.title_id);
                     const notEnoughSpace = !!storage && maxAvailable < requiredSpace;
-                    const canInstall = pkg.can_install !== false && !pkg.is_backport_installed;
+                    const canInstall = pkg.can_install !== false;
                     const isInstallDisabled = !canInstall || notEnoughSpace || installerStatus.is_installing;
 
                     return (
@@ -548,11 +548,6 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                           <p className="text-xs sm:text-sm font-mono text-zinc-500 truncate mt-0.5">
                             {pkg.title_id} • {formatBytes(pkg.file_size)}
                           </p>
-                          {pkg.is_backport_installed && (
-                            <span className="inline-block text-[10px] font-bold mt-1 px-2 py-0.5 rounded-[2px] bg-emerald-600/20 text-emerald-300 border border-emerald-500/30">
-                              INSTALLED
-                            </span>
-                          )}
                           {!canInstall && pkg.install_disabled_reason && (
                             <p className="text-xs text-amber-400 mt-1">{pkg.install_disabled_reason}</p>
                           )}
@@ -568,7 +563,7 @@ export default function TitleDetailView({ title: selectedTitle, onBack, onInstal
                               : 'bg-amber-600 hover:bg-amber-500 text-white cursor-pointer'
                           }`}
                         >
-                          {pkg.is_backport_installed ? 'Installed' : notEnoughSpace ? 'No Space' : 'Install Backport'}
+                          {notEnoughSpace ? 'No Space' : 'Install Backport'}
                         </button>
                       </div>
                     );

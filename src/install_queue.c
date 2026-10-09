@@ -70,9 +70,16 @@ static void package_from_request(const install_queue_request_t *r, pkg_detail_t 
     snprintf(pkg->content_id, sizeof(pkg->content_id), "%s", r->content_id);
     snprintf(pkg->pkg_type_str, sizeof(pkg->pkg_type_str), "%s", r->kind);
     snprintf(pkg->app_version, sizeof(pkg->app_version), "%s", r->version);
-    pkg->pkg_type = !strcmp(r->kind, "update") ? PKG_TYPE_UPDATE :
+    pkg->pkg_type = !strcmp(r->kind, "backport") ? PKG_TYPE_BACKPORT :
+                    !strcmp(r->kind, "update") ? PKG_TYPE_UPDATE :
                     !strcmp(r->kind, "dlc") ? PKG_TYPE_DLC : PKG_TYPE_BASE;
     pkg->total_pkg_size = pkg->file_size = r->total_bytes;
+}
+
+static int has_request_metadata(const install_queue_request_t *request) {
+    return request->title_id[0] &&
+           (!strcmp(request->kind, "base") || !strcmp(request->kind, "update") ||
+            !strcmp(request->kind, "dlc") || !strcmp(request->kind, "backport"));
 }
 
 /* Called under mutex. A base queued later cannot satisfy an earlier job. */
@@ -518,7 +525,13 @@ static void tick(void) {
 
     pkg_detail_t pkg;
     package_from_request(&snapshot.request, &pkg);
-    int parse_rc = snapshot.request.owner[0] ? 0 : pkg_parser_parse(snapshot.request.path, &pkg);
+    int parse_rc = 0;
+    if (!snapshot.request.owner[0] &&
+        pkg_scanner_find_by_path(snapshot.request.path, &pkg) != 0 &&
+        pkg_parser_parse(snapshot.request.path, &pkg) != 0) {
+        package_from_request(&snapshot.request, &pkg);
+        parse_rc = !has_request_metadata(&snapshot.request);
+    }
     pkg_install_eligibility_t eligibility = {0};
     if (!parse_rc) pkg_scanner_check_install_eligibility(&pkg, &eligibility);
     int installed = !parse_rc && app_info_check_installed(pkg.title_id, NULL, 0);

@@ -729,6 +729,7 @@ const char *installer_strerror(int code) {
     case 0x80B2116Eu: return "PLAYGO_ERROR_CORE_INVALID_VERSION";
     case 0x80B21170u: return "PLAYGO_ERROR_CORE_PATCH_INVALID_RANGE";
     case 0x80B2116Fu: return "PLAYGO_ERROR_CORE_INVALID_SLOT";
+    case 0x80B21605u: return "SCE_PLAYGO_ERROR_CORE_INVALID_DELTA_VERSION";
     case 0x80B2100Du: return "PLAYGO_ERROR_CORE_NOT_READY";
     case 0x80B2100Eu: return "PLAYGO_ERROR_CORE_TIMEOUT";
     default: return NULL;
