@@ -18,6 +18,7 @@ typedef struct {
     int fade_installed_packages;
     int all_sources_mode;
     int pkg_install_debug;  /* 1 = log every stream server connection to /data/pkgmgr/ */
+    int show_package_paths; /* 1 = show filename & path on package details screen */
     smb_share_config_t smb_shares[MAX_SMB_SHARES];
     int smb_share_count;
 } app_settings_t;

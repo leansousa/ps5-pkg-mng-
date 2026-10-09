@@ -10,7 +10,16 @@ export function useModalInert(isModalOpen) {
   const previousFocusRef = useRef(null);
 
   useEffect(() => {
-    if (!isModalOpen) return;
+    if (!isModalOpen) {
+      // Native inert can blur the opener during React's commit, before the
+      // open effect runs. Remember focus while the background is still active.
+      const rememberFocus = (event) => {
+        if (event.target !== document.body && event.target !== document.documentElement) previousFocusRef.current = event.target;
+      };
+      if (document.activeElement && document.activeElement !== document.body) previousFocusRef.current = document.activeElement;
+      window.addEventListener('focusin', rememberFocus, true);
+      return () => window.removeEventListener('focusin', rememberFocus, true);
+    }
 
     // 1. Remember previously focused element to restore when modal closes
     if (document.activeElement && document.activeElement !== document.body) {
@@ -20,18 +29,20 @@ export function useModalInert(isModalOpen) {
     const background = document.getElementById('app-main-content');
 
     const deactivateElement = (el) => {
-      if (!el || el.hasAttribute('data-modal-prev-disabled')) return;
+      if (!el) return;
 
-      const wasDisabled = el.disabled === true || el.hasAttribute('disabled');
-      el.setAttribute('data-modal-prev-disabled', wasDisabled ? 'true' : 'false');
+      if (!el.hasAttribute('data-modal-prev-disabled')) {
+        const wasDisabled = el.disabled === true || el.hasAttribute('disabled');
+        el.setAttribute('data-modal-prev-disabled', wasDisabled ? 'true' : 'false');
 
-      const prevTabIndex = el.getAttribute('tabindex');
-      el.setAttribute('data-modal-prev-tabindex', prevTabIndex !== null ? prevTabIndex : '__none__');
+        const prevTabIndex = el.getAttribute('tabindex');
+        el.setAttribute('data-modal-prev-tabindex', prevTabIndex !== null ? prevTabIndex : '__none__');
+      }
 
-      if ('disabled' in el) {
+      if ('disabled' in el && !el.disabled) {
         el.disabled = true;
       }
-      el.setAttribute('tabindex', '-1');
+      if (el.getAttribute('tabindex') !== '-1') el.setAttribute('tabindex', '-1');
     };
 
     const deactivateBackground = () => {
@@ -52,10 +63,19 @@ export function useModalInert(isModalOpen) {
     // 2. Watch for background re-renders while modal is open
     let observer = null;
     if (background && window.MutationObserver) {
-      observer = new MutationObserver(() => {
+      observer = new MutationObserver((records) => {
+        // Remember React's latest intended states, then reapply the workaround.
+        // This matters on PS5 browsers without native inert support when a
+        // background install finishes and React enables a button again.
+        records.forEach(({ type, target, attributeName }) => {
+          if (type !== 'attributes' || !target.hasAttribute('data-modal-prev-disabled')) return;
+          if (attributeName === 'disabled') target.setAttribute('data-modal-prev-disabled', target.disabled ? 'true' : 'false');
+          if (attributeName === 'tabindex') target.setAttribute('data-modal-prev-tabindex', target.getAttribute('tabindex') ?? '__none__');
+        });
         deactivateBackground();
+        observer.takeRecords(); // Discard the attribute changes made by this hook.
       });
-      observer.observe(background, { childList: true, subtree: true });
+      observer.observe(background, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'tabindex'] });
     }
 
     // 3. Move controller focus to the primary/cancel button inside the modal
@@ -107,11 +127,23 @@ export function useModalInert(isModalOpen) {
     };
 
     window.addEventListener('keydown', handleKeyDown, true);
+    const handleFocusIn = (event) => {
+      const modalDialog = document.querySelector('[data-modal-dialog="true"]') || document.querySelector('[role="dialog"]');
+      if (!modalDialog || modalDialog.contains(event.target)) return;
+      // Redirect after the current focus event to avoid nested focus changes.
+      Promise.resolve().then(() => {
+        if (!document.contains(modalDialog) || modalDialog.contains(document.activeElement)) return;
+        const target = modalDialog.querySelector('button:not([disabled]):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])');
+        target?.focus();
+      });
+    };
+    window.addEventListener('focusin', handleFocusIn, true);
 
     // 5. Cleanup on modal close: restore background states & focus
     return () => {
       clearTimeout(focusTimer);
       window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('focusin', handleFocusIn, true);
 
       if (observer) {
         observer.disconnect();

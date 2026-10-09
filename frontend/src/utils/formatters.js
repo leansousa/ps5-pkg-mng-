@@ -10,15 +10,15 @@ export function formatBytes(bytes) {
 export function formatEta(seconds) {
   if (!seconds || seconds <= 0 || !isFinite(seconds)) return null;
   const s = Math.ceil(seconds);
-  if (s < 60) return `${s}s remaining`;
+  if (s < 60) return `${s}s`;
   if (s < 3600) {
     const mins = Math.floor(s / 60);
     const secs = s % 60;
-    return `${mins}m ${secs}s remaining`;
+    return `${mins}m ${secs}s`;
   }
   const hrs = Math.floor(s / 3600);
   const mins = Math.floor((s % 3600) / 60);
-  return `${hrs}h ${mins}m remaining`;
+  return `${hrs}h ${mins}m`;
 }
 
 export function formatVersion(ver) {

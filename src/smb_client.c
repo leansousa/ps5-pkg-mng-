@@ -139,6 +139,9 @@ int smb_client_find_share_cfg(const char *smb_url, smb_share_config_t *out_cfg) 
     app_settings_t settings;
     pkg_cache_get_settings(&settings);
 
+    int best_idx = -1;
+    size_t best_path_len = 0;
+
     for (int i = 0; i < settings.smb_share_count; i++) {
         smb_share_config_t *c = &settings.smb_shares[i];
         if (!c->enabled) continue;
@@ -146,16 +149,34 @@ int smb_client_find_share_cfg(const char *smb_url, smb_share_config_t *out_cfg) 
         smb_share_config_t clean_c = *c;
         smb_client_sanitize_config(&clean_c);
 
-        /* Match by server & share */
-        if (strcasecmp(clean_c.server, srv) == 0 && strcasecmp(clean_c.share, shr) == 0) {
-            memcpy(out_cfg, c, sizeof(smb_share_config_t));
-            return 0;
-        }
-        /* Or match if server matches drive id, e.g. smb://smb0/... */
+        /* Match if server matches drive id, e.g. smb://smb0/... */
         if (strcasecmp(clean_c.id, srv) == 0) {
             memcpy(out_cfg, c, sizeof(smb_share_config_t));
             return 0;
         }
+
+        /* Match by server & share */
+        if (strcasecmp(clean_c.server, srv) == 0 && strcasecmp(clean_c.share, shr) == 0) {
+            size_t c_path_len = strlen(clean_c.path);
+            if (c_path_len > 0) {
+                size_t rel_len = strlen(rel);
+                if (rel_len >= c_path_len && strncasecmp(rel, clean_c.path, c_path_len) == 0 &&
+                    (rel[c_path_len] == '\0' || rel[c_path_len] == '/')) {
+                    if (c_path_len > best_path_len || best_idx == -1) {
+                        best_idx = i;
+                        best_path_len = c_path_len;
+                    }
+                }
+            } else if (best_idx == -1) {
+                best_idx = i;
+                best_path_len = 0;
+            }
+        }
+    }
+
+    if (best_idx >= 0) {
+        memcpy(out_cfg, &settings.smb_shares[best_idx], sizeof(smb_share_config_t));
+        return 0;
     }
 
     /* Fallback: if no credentials matched, return a guest config for that server/share */

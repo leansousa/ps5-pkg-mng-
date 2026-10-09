@@ -1,7 +1,7 @@
 import React from 'react';
 import { formatBytes } from '../../utils/formatters';
 
-export default function Header({ appVersion, storage, showSettings, showSmbPage, onSettingsClick, onRescan, refreshing, selectedDrive, onBackToDrives }) {
+export default function Header({ appVersion, storage, showSettings, showSmbPage, onSettingsClick, onRescan, refreshing, selectedDrive, onBackToDrives, queueOverview, queueOpen, onQueueClick }) {
   const internalFree = storage ? (storage.internal?.free ?? storage.free ?? 0) : 0;
   const internalTotal = storage ? ((storage.internal?.total ?? storage.total) || 1) : 1;
   const internalUsed = storage ? (storage.internal?.used ?? storage.used ?? Math.max(0, internalTotal - internalFree)) : 0;
@@ -170,6 +170,12 @@ export default function Header({ appVersion, storage, showSettings, showSmbPage,
                 <path d="M16 21h5v-5" />
               </svg>
               <span>{refreshing ? 'Scanning...' : 'Rescan'}</span>
+            </button>
+            <button type="button" onClick={onQueueClick} aria-controls="install-queue-panel" aria-haspopup="dialog" aria-expanded={Boolean(queueOpen)}
+              className="ps5-focus-item px-3 py-2 rounded-[2px] bg-blue-500/10 border border-blue-500/30 text-xs text-blue-200 flex items-center gap-2 shrink-0">
+              <span>Installs</span>
+              {queueOverview?.pending.length > 1 && <span className="bg-blue-600 px-1.5 rounded-full font-bold">{queueOverview.pending.length}</span>}
+              {queueOverview?.pending.length > 0 && <span>{queueOverview.percent === null ? 'Working…' : `${Math.floor(queueOverview.percent)}%`}</span>}
             </button>
           </div>
         </div>

@@ -1,8 +1,9 @@
+import { canQueuePackage, pendingStates } from '../../utils/installQueue';
 import React, { useEffect, useRef, useState } from 'react';
 import { browseSmb, inspectSmb } from '../../api/smb';
 import { formatBytes } from '../../utils/formatters';
 
-export default function SmbFileBrowser({ share, onBack, onInstall }) {
+export default function SmbFileBrowser({ share, onBack, onInstall, installQueue }) {
   const root = (share.path || '').replace(/^\/+|\/+$/g, '');
   const [path, setPath] = useState(root);
   const [cursors, setCursors] = useState(['']);
@@ -14,6 +15,10 @@ export default function SmbFileBrowser({ share, onBack, onInstall }) {
   const [selected, setSelected] = useState(null);
   const request = useRef(0);
   const cursor = cursors[cursors.length - 1];
+  const jobs = installQueue?.jobs || [];
+  const queueable = selected && canQueuePackage(selected, jobs);
+  const queued = selected && jobs.some((job) => job.path === selected.path && pendingStates.has(job.state));
+  const queueBusy = jobs.some((job) => pendingStates.has(job.state));
   const button = 'ps5-focus-item px-4 py-2 bg-white/10 hover:bg-white/20 rounded-[2px] disabled:opacity-40';
 
   useEffect(() => {
@@ -67,11 +72,11 @@ export default function SmbFileBrowser({ share, onBack, onInstall }) {
       {selected && <div className="p-4 border border-cyan-500/40 space-y-3">
         <h3 className="font-bold">{selected.title_name}</h3>
         <p>{selected.title_id} · {selected.pkg_type} · {selected.app_version} · {formatBytes(selected.total_pkg_size || selected.file_size)}</p>
-        {!selected.can_install && <p>{selected.install_disabled_reason}</p>}
-        <button className={button} disabled={busy || !selected.can_install} onClick={async () => {
+        {!queueable && !queued && <p>{selected.install_disabled_reason}</p>}
+        <button className={button} disabled={busy || !queueable} onClick={async () => {
           setBusy(true);
           try { await onInstall(selected); } finally { setBusy(false); }
-        }}>Install selected PKG</button>
+        }}>{queued ? 'Queued' : queueBusy ? 'Queue selected PKG' : 'Install selected PKG'}</button>
       </div>}
       <div className="space-y-1">
         {entries.map((entry) => <button key={entry.name} disabled={busy}

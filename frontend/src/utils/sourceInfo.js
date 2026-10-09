@@ -25,12 +25,14 @@ export function getSourceInfo(pkgPath, drivesList = []) {
   if (pkgPath.startsWith('smb://')) {
     let matchedDrive = null;
     if (Array.isArray(drivesList)) {
-      matchedDrive = drivesList.find((d) => {
+      const matching = drivesList.filter((d) => {
         if (d.type !== 'smb' || !d.path) return false;
         const normDPath = d.path.replace(/\/+$/, '');
         const normPkg = pkgPath.replace(/\/+$/, '');
         return normPkg === normDPath || normPkg.startsWith(normDPath + '/');
       });
+      matching.sort((a, b) => (b.path || '').length - (a.path || '').length);
+      matchedDrive = matching[0] || null;
     }
 
     let rawName = '';

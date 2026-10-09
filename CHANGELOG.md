@@ -1,14 +1,37 @@
 # Changelog
 
-## v1.4.1.1
+## v1.5.0
 
-- Group backport packages with their matching games and provide a dedicated Backport section
-- Fix backport installation progress totals and completion tracking
+### Install Queue
+- Added a console-owned background install queue for USB, disc, SMB, and browser uploads, allowing browsing across the app while installations run in the background
+- Added a dedicated full-page Install Queue view (`#/queue`) with active installation hero, total queue progress, live transfer speed, remaining time, and a scrollable queue list
+- Added individual package cancellation, retry for failed sources, and a Clear completed action
+- Added an "All done" summary screen when queued installations complete
+- Automatically clear finished and errored queue jobs after a 60-minute retention period
+- Automatically abort queued packages if an identical or newer version is already installed, preventing blocked install loops
+- Replaced the base/update batch modal with independent queue jobs and added a bulk "Install all DLCs" action
+- Offline USB and disc packages are submitted sequentially to the PS5 system queue
 
-## v1.4.1-argo
+### PS5 Browser Title Progress
+- Display detailed live installation progress in the PS5 browser page title during active installations
+- Feature a text-based progress bar (`[■■■■■□□□□□] 50%`) with batch index (`[1/3]`), package name (truncated to 40 characters), transfer speed, and estimated time remaining
+- Standard app title is automatically restored when installations complete or the queue is idle
 
-- Group backport packages with their matching games and provide a dedicated Backport section
-- Fix backport installation progress totals and completion tracking
+### Title Details & Settings
+- Separate and display different base packages for the same title (e.g. different editions or regions) (#27)
+- Display file name and relative path for updates in the title detail view (#24)
+- Added a setting to show package filename and path in title details (disabled by default)
+
+### Direct Install
+- Redesigned Direct Install with package cards showing locally extracted thumbnails, platform/type badges, and "Install" and "Cancel" actions
+- Added an "Install all" bulk action to queue all ready packages at once
+- Streamlined the interface by removing the folder picker and redundant clear actions
+
+### Bug Fixes
+- Fixed multiple Samba locations on the same server share overwriting each other's game catalog info (#32)
+- Display clear, readable error messages when installation fails due to insufficient console storage space (#25)
+
+---
 
 ## v1.4.1
 

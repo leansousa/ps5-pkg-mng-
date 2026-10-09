@@ -21,6 +21,7 @@ export function useSettings(props) {
       fade_installed_packages: true,
       all_sources_mode: false,
       pkg_install_debug: false,
+      show_package_paths: false,
       smb_shares: []
     };
   });

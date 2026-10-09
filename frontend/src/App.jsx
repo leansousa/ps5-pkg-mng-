@@ -10,7 +10,6 @@ import { checkVersion } from './api/health';
 import { getStorage } from './api/storage';
 import { getDrives } from './api/drives';
 import { getPackages, refreshPackages, getScanStatus, waitForScan, quickScan, shouldAutoScanDrive } from './api/packages';
-import { pollStatus, installPackage, cancelInstall } from './api/installer';
 import { getSettings, saveSettings, closeManager } from './api/settings';
 import { installShortcut as apiInstallShortcut } from './api/settings';
 import { getCacheStats, clearCache } from './api/cache';
@@ -27,12 +26,12 @@ import { useDonation } from './hooks/useDonation';
 import { useHistoryNavigation, getRouteFromHash, resolveDrive } from './hooks/useHistoryNavigation';
 import { useModalInert } from './hooks/useModalInert';
 import { useDirectUpload } from './hooks/useDirectUpload';
-import { uploadStatus } from './api/directInstall';
+import { useInstallQueue } from './hooks/useInstallQueue';
+import InstallQueueView from './components/views/InstallQueueView';
+import { collectDroppedPkgFiles } from './utils/collectPkgFiles';
 
 import OfflineScreen from './components/screens/OfflineScreen';
 import LoadingScreen from './components/screens/LoadingScreen';
-import WaitingForPartScreen from './components/screens/WaitingForPartScreen';
-import InstallingScreen from './components/screens/InstallingScreen';
 import ScanningScreen from './components/screens/ScanningScreen';
 
 import Toast from './components/layout/Toast';
@@ -90,39 +89,10 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('date-desc');
   const [selectedTitleId, setSelectedTitleId] = useState(null);
-  const [directInstallScreenDismissed, setDirectInstallScreenDismissed] = useState(false);
   const [showDirectInstall, setShowDirectInstall] = useState(false);
-  const directTabId = useRef(Math.random().toString(36).slice(2) + Date.now());
-  const directUpload = useDirectUpload(directTabId.current);
+  const directUpload = useDirectUpload();
+  const [showQueue, setShowQueue] = useState(false);
   const directTransferActive = directUpload.state === 'uploading' || directUpload.installing;
-  const directLeaseHeld = Boolean(directUpload.sessionId) &&
-    directUpload.state !== 'idle' && directUpload.state !== 'canceled';
-
-  useEffect(() => {
-    if (!directLeaseHeld) return;
-    const mark = () => localStorage.setItem('directInstallLease', JSON.stringify({
-      tab: directTabId.current, time: Date.now(), session: directUpload.sessionId
-    }));
-    mark();
-    const timer = setInterval(mark, 2000);
-    return () => {
-      clearInterval(timer);
-      try {
-        const lease = JSON.parse(localStorage.getItem('directInstallLease') || '{}');
-        if (lease.tab === directTabId.current) localStorage.removeItem('directInstallLease');
-      } catch (e) {}
-    };
-  }, [directLeaseHeld, directUpload.sessionId]);
-
-  useEffect(() => {
-    if (!directTransferActive) return;
-    const warn = (event) => {
-      event.preventDefault();
-      event.returnValue = '';
-    };
-    window.addEventListener('beforeunload', warn);
-    return () => window.removeEventListener('beforeunload', warn);
-  }, [directTransferActive]);
 
   const selectedDriveRef = useRef(selectedDrive);
   selectedDriveRef.current = selectedDrive;
@@ -355,8 +325,9 @@ export default function App() {
 
     const groups = [];
     for (const [key, { items, srcInfo }] of groupMap.entries()) {
-      // Find base package
-      const base = items.find((p) => p.pkg_type === 'base') || null;
+      // Find base packages
+      const bases = items.filter((p) => p.pkg_type === 'base');
+      const base = bases[0] || null;
 
       // Find update packages, sorted newest version first
       const updates = items.filter((p) => p.pkg_type === 'update');
@@ -458,6 +429,7 @@ export default function App() {
         has_icon: !!(imagePkg && imagePkg.has_icon),
         iconPath: imagePkg ? imagePkg.path : '',
         base,
+        bases,
         updates,
         dlcs,
         backports,
@@ -536,22 +508,18 @@ export default function App() {
   }, [groupedTitles, selectedTitleId]);
 
 
-  const {
-    installerStatus, setInstallerStatus, batchInstall, setBatchInstall, initialStatusLoaded, setInitialStatusLoaded,
-    etaInfo, isWaitingForPart, isBatchActive, isInstalling, isDiscSource, speedCalcRef, wasInstallingRef, batchInstallRef,
-    installerStatusRef, fetchStatus, handleInstall, handleInstallBaseAndUpdate, handleCancel,
-    handleDetachDirectStorage
-  } = useInstaller({
-    showToast,
-    fetchStorage,
-    fetchPackagesForDrive,
-    selectedDriveRef,
-    selectedTitleIdRef,
-    detailScrollPositionRef,
-    shouldRestoreDetailScrollRef,
-    storage,
-    selectedTitle,
+  const { installerStatus, installerStatusRef, initialStatusLoaded, fetchStatus,
+    isWaitingForPart, isInstalling } = useInstaller();
+  const installQueue = useInstallQueue(directUpload, {
+    showToast, appVersion,
+    onResolved: () => {
+      fetchStorage();
+      if (selectedDriveRef.current) fetchPackagesForDrive(selectedDriveRef.current.id);
+    },
   });
+  const handleInstall = (pkg) => installQueue.enqueuePackages([pkg]);
+  const handleInstallBaseAndUpdate = (base, update) => installQueue.enqueuePackages([base, update]);
+  const handleInstallAllDlcs = (dlcs) => installQueue.enqueuePackages(dlcs);
 
   const {
     showDonateQr, setShowDonateQr, showDonateModal, setShowDonateModal, donateNeverNotice, setDonateNeverNotice,
@@ -604,6 +572,8 @@ export default function App() {
     handleCloseSmb,
     handleOpenDirectInstall,
     handleCloseDirectInstall,
+    handleOpenQueue,
+    handleCloseQueue,
   } = useHistoryNavigation({
     setSelectedDrive,
     selectedDriveRef,
@@ -626,8 +596,6 @@ export default function App() {
     setSearchQuery,
     triggerQuickScan,
     installerStatus,
-    isBatchActive,
-    directInstallScreenDismissed,
     showDonateModal,
     handleCloseDonateModal,
     showClearCacheModal,
@@ -636,33 +604,17 @@ export default function App() {
     setShowSmbModal,
     selectedLeftoverToDelete,
     setSelectedLeftoverToDelete,
+    showQueue,
+    setShowQueue,
     showToast,
     initialRoute: selectedDrive ? { type: 'drive', driveId: selectedDrive.id || '__all__' } : { type: 'drives' },
   });
-  const handleCloseDirectInstallRef = useRef(handleCloseDirectInstall);
-  handleCloseDirectInstallRef.current = handleCloseDirectInstall;
 
   const openDirectInstall = useCallback(async () => {
     if (isPlayStation) return false;
-    try {
-      const status = await uploadStatus();
-      if (status.active) {
-        let lease = {};
-        try { lease = JSON.parse(localStorage.getItem('directInstallLease') || '{}'); } catch (e) {}
-        const anotherWindow = lease.tab && lease.tab !== directTabId.current && Date.now() - lease.time < 10000;
-        const anotherSession = status.session_id !== sessionStorage.getItem('directInstallSession');
-        if (anotherWindow || anotherSession) {
-          window.alert('Direct Install is already active in another window. Finish it there first.');
-          return false;
-        }
-      }
-    } catch (e) {
-      showToast('Could not check Direct Install status', 'error');
-      return false;
-    }
     handleOpenDirectInstall();
     return true;
-  }, [handleOpenDirectInstall, isPlayStation, showToast]);
+  }, [handleOpenDirectInstall]);
 
   useEffect(() => {
     if (isPlayStation) return;
@@ -678,11 +630,11 @@ export default function App() {
       event.preventDefault();
       event.__pkgManagerDropHandled = true;
 
-      // Keep the current page and upload session intact while an install is active.
-      if (directUpload.state === 'uploading' || directUpload.state === 'checking' || directUpload.installing) return;
-
-      const file = event.dataTransfer.files[0];
-      if (await openDirectInstall()) directUpload.selectFile(file);
+      const collected = collectDroppedPkgFiles(event.dataTransfer);
+      if (await openDirectInstall()) {
+        const result = await collected;
+        await installQueue.addFiles(result.files, result.unreadable);
+      }
     };
 
     window.addEventListener('dragover', onDragOver);
@@ -691,34 +643,7 @@ export default function App() {
       window.removeEventListener('dragover', onDragOver);
       window.removeEventListener('drop', onDrop);
     };
-  }, [directUpload.installing, directUpload.selectFile, directUpload.state, isPlayStation, openDirectInstall]);
-
-  useEffect(() => {
-    if (!showDirectInstall || directUpload.sessionId) return;
-    let stopped = false;
-    let checking = false;
-    const check = async () => {
-      if (checking) return;
-      checking = true;
-      try {
-        const status = await uploadStatus();
-        if (stopped || !status.active) return;
-        const lease = JSON.parse(localStorage.getItem('directInstallLease') || '{}');
-        const anotherWindow = lease.tab && lease.tab !== directTabId.current && Date.now() - lease.time < 10000;
-        const anotherSession = status.session_id !== sessionStorage.getItem('directInstallSession');
-        if (anotherWindow || anotherSession) {
-          stopped = true;
-          window.alert('Direct Install is active in another window.');
-          handleCloseDirectInstallRef.current();
-        }
-      } catch (e) {} finally {
-        checking = false;
-      }
-    };
-    check();
-    const timer = setInterval(check, 3000);
-    return () => { stopped = true; clearInterval(timer); };
-  }, [directUpload.sessionId, showDirectInstall]);
+  }, [installQueue.addFiles, openDirectInstall]);
 
   const isAnyModalOpen = Boolean(
     showDonateModal ||
@@ -829,12 +754,6 @@ export default function App() {
   }, [installerStatus.is_installing, installerStatus.waiting_for_disc, isOffline]);
 
   useEffect(() => {
-    if (!installerStatus.is_installing && !isBatchActive) {
-      setDirectInstallScreenDismissed(false);
-    }
-  }, [installerStatus.is_installing, isBatchActive]);
-
-  useEffect(() => {
     if (isOffline) return;
     // Poll individual local drives; network discovery runs on explicit navigation/rescan.
     const interval = setInterval(() => {
@@ -846,41 +765,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, [triggerQuickScan, isOffline]);
 
-  useEffect(() => {
-    if (!selectedTitleId && !isInstalling && !isWaitingForPart && !batchInstall && shouldRestoreScrollRef.current) {
-      shouldRestoreScrollRef.current = false;
-      const targetY = scrollPositionRef.current || 0;
-      const restore = () => {
-        window.scrollTo(0, targetY);
-        if (document.documentElement) document.documentElement.scrollTop = targetY;
-        if (document.body) document.body.scrollTop = targetY;
-      };
-      restore();
-      requestAnimationFrame(() => {
-        restore();
-        setTimeout(restore, 20);
-        setTimeout(restore, 80);
-      });
-    }
-  }, [selectedTitleId, isInstalling, isWaitingForPart, batchInstall]);
-
-  useEffect(() => {
-    if (!isInstalling && !isWaitingForPart && !batchInstall && selectedTitleId && shouldRestoreDetailScrollRef.current) {
-      shouldRestoreDetailScrollRef.current = false;
-      const targetY = detailScrollPositionRef.current || 0;
-      const restore = () => {
-        window.scrollTo(0, targetY);
-        if (document.documentElement) document.documentElement.scrollTop = targetY;
-        if (document.body) document.body.scrollTop = targetY;
-      };
-      restore();
-      requestAnimationFrame(() => {
-        restore();
-        setTimeout(restore, 20);
-        setTimeout(restore, 80);
-      });
-    }
-  }, [isInstalling, isWaitingForPart, batchInstall, selectedTitleId]);
   if (isClosing) {
     return (
       <div className="min-h-screen bg-[#0a0a0f] text-white flex items-center justify-center px-4 font-ps5">
@@ -909,39 +793,6 @@ export default function App() {
     return <LoadingScreen />;
   }
 
-  // Waiting for a disc or USB package part.
-  if (isWaitingForPart) {
-    return <WaitingForPartScreen
-      installerStatus={installerStatus}
-      isDiscSource={isDiscSource}
-      onCancel={handleCancel}
-    />;
-  }
-
-  // Active installation overlay.
-  if (isInstalling && !directInstallScreenDismissed) {
-    return <InstallingScreen
-      installerStatus={installerStatus}
-      batchInstall={batchInstall}
-      etaInfo={etaInfo}
-      storage={storage}
-      isDiscSource={isDiscSource}
-      debugSpeeds={settings.pkg_install_debug && installerStatus?.pkg_path?.startsWith('live:') ? {
-        upload: directUpload.uploadSpeed,
-        install: speedCalcRef.current.speed
-      } : null}
-      onCancel={() => {
-        handleCancel();
-        if (installerStatus?.pkg_path?.startsWith('live:')) directUpload.cancel();
-      }}
-      onDismiss={async () => {
-        if (await handleDetachDirectStorage()) setDirectInstallScreenDismissed(true);
-      }}
-      packages={packages}
-      directIconUrl={directUpload.iconUrl}
-    />;
-  }
-
   // Refresh and scan progress overlay (for full catalog rebuilds).
   if (scanStatus.is_scanning) {
     return <ScanningScreen scanStatus={scanStatus} />;
@@ -959,41 +810,59 @@ export default function App() {
         aria-hidden={isAnyModalOpen ? 'true' : undefined}
         className={`border-0 m-0 p-0 min-w-0 w-full flex flex-col flex-1 ${isAnyModalOpen ? 'pointer-events-none select-none' : ''}`}
       >
-        <Header
-        appVersion={appVersion}
-        storage={storage}
-        showSettings={showSettings}
-        showSmbPage={showSmbPage}
-        onSettingsClick={() => {
-          if (showDirectInstall) {
-            if (directTransferActive && !window.confirm('A direct installation is in progress. Leave this page?')) return;
-            setShowDirectInstall(false);
-          }
-          if (showSmbPage) {
-            handleCloseSmb();
-            return;
-          }
-          if (showSettings) {
-            handleCloseSettings();
-            return;
-          }
-          handleOpenSettings();
-        }}
-        onRescan={handleQuickRescan}
-        refreshing={refreshing}
-        selectedDrive={selectedDrive}
-        onBackToDrives={handleBackToDrives}
-      />
+        {!showQueue && (
+          <Header
+            appVersion={appVersion}
+            queueOverview={installQueue.overview}
+            queueOpen={showQueue}
+            onQueueClick={() => {
+              if (showQueue) {
+                handleCloseQueue();
+                return;
+              }
+              handleOpenQueue();
+            }}
+            storage={storage}
+            showSettings={showSettings}
+            showSmbPage={showSmbPage}
+            onSettingsClick={() => {
+              if (showDirectInstall) {
+                setShowDirectInstall(false);
+              }
+              if (showQueue) {
+                handleCloseQueue();
+                return;
+              }
+              if (showSmbPage) {
+                handleCloseSmb();
+                return;
+              }
+              if (showSettings) {
+                handleCloseSettings();
+                return;
+              }
+              handleOpenSettings();
+            }}
+            onRescan={handleQuickRescan}
+            refreshing={refreshing}
+            selectedDrive={selectedDrive}
+            onBackToDrives={handleBackToDrives}
+          />
+        )}
 
-      {/* Main Container */}
-      <main className="w-full px-4 py-4 flex-1 space-y-6">
-        {showDirectInstall ? (
+        {/* Main Container */}
+        <main className={`w-full flex-1 ${showQueue ? 'px-4 sm:px-8 py-3 flex flex-col min-h-0' : 'px-4 py-4 space-y-6'}`}>
+          {showQueue ? (
+            <InstallQueueView
+              queue={installQueue}
+              onBack={handleCloseQueue}
+              debugEnabled={Boolean(settings.pkg_install_debug)}
+            />
+        ) : showDirectInstall ? (
           <DirectInstallView
             onBack={handleCloseDirectInstall}
-            up={directUpload}
-            storage={storage}
-            installerStatus={installerStatus}
-            debugEnabled={Boolean(settings.pkg_install_debug)}
+            queue={installQueue}
+            onOpenQueue={handleOpenQueue}
           />
         ) : showSmbPage ? (
           <SmbManagementView
@@ -1027,6 +896,7 @@ export default function App() {
             onTest={handleTestSmbConnection}
             testing={smbTesting}
             onInstall={handleInstall}
+            installQueue={installQueue}
           />
         ) : showSettings ? (
           <SettingsView
@@ -1062,6 +932,8 @@ export default function App() {
             onBack={handleBackToPackages}
             onInstall={handleInstall}
             onInstallBaseAndUpdate={handleInstallBaseAndUpdate}
+            onInstallAllDlcs={handleInstallAllDlcs}
+            installQueue={installQueue}
             onOpenLeftoverCleanup={handleOpenLeftoverCleanupForTitle}
             installerStatus={installerStatus}
             storage={storage}
@@ -1072,7 +944,7 @@ export default function App() {
         ) : selectedDrive && (settings.smb_shares || []).some((share) => share.id === selectedDrive.id && share.browse_only) ? (
           <SmbFileBrowser key={selectedDrive.id}
             share={settings.smb_shares.find((share) => share.id === selectedDrive.id)}
-            onBack={handleBackToDrives} onInstall={handleInstall} />
+            onBack={handleBackToDrives} onInstall={handleInstall} installQueue={installQueue} />
         ) : selectedDrive ? (
           <PackageGridView
             page={packagePage}
@@ -1104,7 +976,7 @@ export default function App() {
         )}
       </main>
 
-      <Footer appVersion={appVersion} />
+      {!showQueue && <Footer appVersion={appVersion} />}
       </fieldset>
 
       <DonateModal

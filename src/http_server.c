@@ -10,6 +10,7 @@
 #include "pkg_cache.h"
 #include "icon_blurhash.h"
 #include "installer.h"
+#include "install_queue.h"
 #include "assets_index_html.h"
 #include "assets_cache_appcache.h"
 #include "assets_favicon_svg.h"
@@ -250,7 +251,7 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
     if (strcmp(method, "POST") == 0 && *upload_data_size != 0) {
         post_state_t *ps = (post_state_t *)*con_cls;
         if (!ps) return MHD_NO;
-        size_t body_limit = strcmp(url, "/api/upload/icon") == 0
+        size_t body_limit = strcmp(url, "/api/queue") == 0 ? (512 * 1024) : strcmp(url, "/api/upload/icon") == 0
             ? WS_DIRECT_ICON_MAX : MAX_POST_BODY_SIZE - 1;
         if (ps->oversize || *upload_data_size > body_limit - ps->size) {
             ps->oversize = 1;
@@ -281,6 +282,55 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             MHD_destroy_response(resp);
             return ret;
         }
+    }
+
+    /* Process-owned queue: bulk admission is atomic, mutations address job IDs. */
+    if (!strcmp(url, "/api/queue") || !strncmp(url, "/api/queue/", 11)) {
+        post_state_t *ps = (post_state_t *)*con_cls;
+        const char *body = ps && ps->data ? ps->data : "";
+        int rc = -1;
+        char *response = NULL;
+        char owner[65] = {0}, path[80] = {0};
+        extract_json_string_value(body, "owner", owner, sizeof(owner));
+        extract_json_string_value(body, "path", path, sizeof(path));
+        uint64_t id = 0;
+        const char *id_field = strstr(body, "\"id\"");
+        if (id_field && (id_field = strchr(id_field, ':'))) id = strtoull(id_field + 1, NULL, 10);
+        if (!strcmp(method, "GET") && !strcmp(url, "/api/queue")) {
+            response = install_queue_to_json();
+            rc = response ? 0 : -1;
+        } else if (!strcmp(method, "POST")) {
+            if (!strcmp(url, "/api/queue")) {
+                uint64_t ids[INSTALL_QUEUE_MAX_JOBS];
+                size_t count = 0;
+                rc = install_queue_add_json(body, ids, &count);
+                if (!rc) {
+                    response = malloc(count * 24 + 64);
+                    if (response) {
+                        size_t used = snprintf(response, count * 24 + 64, "{\"success\":true,\"ids\":[");
+                        for (size_t i = 0; i < count; i++) used += snprintf(response + used, count * 24 + 64 - used, "%s%llu", i ? "," : "", (unsigned long long)ids[i]);
+                        snprintf(response + used, count * 24 + 64 - used, "]}");
+                    } else rc = -1;
+                }
+            } else if (!strcmp(url, "/api/queue/cancel")) rc = install_queue_cancel(id);
+            else if (!strcmp(url, "/api/queue/retry")) rc = install_queue_retry(id);
+            else if (!strcmp(url, "/api/queue/attach")) rc = install_queue_attach(id, owner, path);
+            else if (!strcmp(url, "/api/queue/heartbeat") && owner[0]) { install_queue_heartbeat(owner); rc = 0; }
+            else if (!strcmp(url, "/api/queue/disconnect") && owner[0]) { install_queue_disconnect(owner); rc = 0; }
+            else if (!strcmp(url, "/api/queue/clear")) { install_queue_clear_finished(); rc = 0; }
+        }
+        const char *fallback = rc == 0 ? "{\"success\":true}" : rc == -3 ?
+            "{\"success\":false,\"error\":\"Queue is full. Clear finished entries first.\"}" : rc == -2 ?
+            "{\"success\":false,\"error\":\"This install is managed by PS5. Use PS5 Notifications.\"}" :
+            "{\"success\":false,\"error\":\"Invalid queue request or job is no longer available\"}";
+        const char *payload = response ? response : fallback;
+        struct MHD_Response *resp = MHD_create_response_from_buffer(strlen(payload), (void *)payload, MHD_RESPMEM_MUST_COPY);
+        add_cors_headers(resp);
+        MHD_add_response_header(resp, "Content-Type", "application/json");
+        enum MHD_Result result = MHD_queue_response(conn, rc == 0 ? MHD_HTTP_OK : MHD_HTTP_BAD_REQUEST, resp);
+        MHD_destroy_response(resp);
+        free(response);
+        return result;
     }
 
     /* ── Direct-install upload sessions ──────────────────────────────
@@ -351,7 +401,7 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             char fn[256] = {0};
             char owner[65] = {0}, resume_sid[64] = {0};
             char title[256] = {0}, title_id[64] = {0}, version[32] = {0}, kind[16] = {0};
-            uint64_t total = 0;
+            uint64_t total = 0, queue_id = 0;
             if (ps && ps->data) {
                 extract_json_string_value(ps->data, "filename", fn, sizeof(fn));
                 extract_json_string_value(ps->data, "owner", owner, sizeof(owner));
@@ -360,6 +410,8 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                 extract_json_string_value(ps->data, "title_id", title_id, sizeof(title_id));
                 extract_json_string_value(ps->data, "app_version", version, sizeof(version));
                 extract_json_string_value(ps->data, "pkg_type", kind, sizeof(kind));
+                const char *qp = strstr(ps->data, "\"queue_id\"");
+                if (qp && (qp = strchr(qp, ':'))) queue_id = strtoull(qp + 1, NULL, 10);
                 const char *tp = strstr(ps->data, "\"total\"");
                 if (tp) {
                     tp = strchr(tp + 7, ':');
@@ -375,8 +427,7 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             } else {
                 char sid[64] = {0};
                 int resuming = ws_direct_session_active();
-                int rc = ws_direct_init_owned(fn, total, owner, resume_sid,
-                                              sid, sizeof(sid));
+                int rc = install_queue_open_upload(queue_id, owner, fn, total, sid, sizeof(sid));
                 if (rc == -2) {
                     snprintf(resp_json, sizeof(resp_json),
                              "{\"success\":false,\"error\":\"Another upload is active\"}");
@@ -871,11 +922,12 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
         char *buf = (char *)malloc(spos + 1024);
         if (!buf) return MHD_NO;
         snprintf(buf, spos + 1024,
-                 "{\"move_installed_to_end\":%s,\"fade_installed_packages\":%s,\"all_sources_mode\":%s,\"pkg_install_debug\":%s,\"smb_shares\":[%s]}",
+                 "{\"move_installed_to_end\":%s,\"fade_installed_packages\":%s,\"all_sources_mode\":%s,\"pkg_install_debug\":%s,\"show_package_paths\":%s,\"smb_shares\":[%s]}",
                  s.move_installed_to_end ? "true" : "false",
                  s.fade_installed_packages ? "true" : "false",
                  s.all_sources_mode ? "true" : "false",
-                 s.pkg_install_debug ? "true" : "false", shares_json);
+                 s.pkg_install_debug ? "true" : "false",
+                 s.show_package_paths ? "true" : "false", shares_json);
         struct MHD_Response *resp = MHD_create_response_from_buffer(
             strlen(buf), (void *)buf, MHD_RESPMEM_MUST_FREE);
         add_cors_headers(resp);
@@ -925,6 +977,15 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                     s.pkg_install_debug = 1;
                 } else if (strncmp(dptr + 20, "false", 5) == 0 || strncmp(dptr + 21, "false", 5) == 0) {
                     s.pkg_install_debug = 0;
+                }
+            }
+
+            char *pptr = strstr(ps->data, "\"show_package_paths\":");
+            if (pptr) {
+                if (strncmp(pptr + 21, "true", 4) == 0 || strncmp(pptr + 22, "true", 4) == 0) {
+                    s.show_package_paths = 1;
+                } else if (strncmp(pptr + 21, "false", 5) == 0 || strncmp(pptr + 22, "false", 5) == 0) {
+                    s.show_package_paths = 0;
                 }
             }
 
@@ -1347,7 +1408,7 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
             status_code = MHD_HTTP_BAD_REQUEST;
         } else if (strncmp(target_path, "live:", 5) == 0) {
             /* NEW: live RAM session (Direct Install, no disk file). */
-            int res = installer_start_live(target_path);
+            int res = -1 /* Browser jobs must attach through /api/queue/attach. */;
             if (res == 0) {
                 snprintf(response_buf, sizeof(response_buf),
                          "{\"success\":true,\"message\":\"Live installation started successfully\"}");
@@ -1373,14 +1434,12 @@ static enum MHD_Result http_on_request(void *cls, struct MHD_Connection *conn,
                 status_code = MHD_HTTP_INTERNAL_SERVER_ERROR;
             }
         } else {
-            int res = update_path[0] != '\0'
-                ? installer_start_batch(target_path, update_path)
-                : installer_start(target_path);
+            int res = install_queue_add_paths(target_path, update_path);
             if (res == 0) {
                 snprintf(response_buf, sizeof(response_buf),
                          update_path[0] != '\0'
-                             ? "{\"success\":true,\"message\":\"Base installation started; update queued\"}"
-                             : "{\"success\":true,\"message\":\"Installation started successfully\"}");
+                             ? "{\"success\":true,\"message\":\"Base and update queued\"}"
+                             : "{\"success\":true,\"message\":\"Installation queued\"}");
             } else if (res == -2) {
                 snprintf(response_buf, sizeof(response_buf),
                          "{\"success\":false,\"error\":\"Another package is currently installing\"}");

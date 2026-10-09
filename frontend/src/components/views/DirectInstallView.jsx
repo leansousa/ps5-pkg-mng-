@@ -1,140 +1,82 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { formatBytes } from '../../utils/formatters';
-import { getInstallStorageOptions } from '../../utils/installStorage';
+import React, { useRef, useState } from 'react';
+import { collectDroppedPkgFiles, collectInputPkgFiles } from '../../utils/collectPkgFiles';
+import { pendingStates, queueStateLabel, canQueueBrowserFile } from '../../utils/installQueue';
+import { formatBytes, formatVersion } from '../../utils/formatters';
+import { getPlatform } from '../../utils/platform';
+import PackageThumbnail from '../PackageThumbnail';
 
-export default function DirectInstallView({ up, onBack, storage, installerStatus, debugEnabled = false }) {
-  const fileRef = useRef(null);
-  const [dragging, setDragging] = useState(false);
-  const busy = up.state === 'uploading';
-  const canChoose = !busy && !up.installing && up.state !== 'checking' && up.state !== 'complete' &&
-    !(up.state === 'error' && up.sessionId);
-  const pct = up.total > 0 ? Math.min(100, Math.round(up.offset / up.total * 100)) : 0;
-  const free = storage
-    ? getInstallStorageOptions(storage, up.details?.title_id)
-      .reduce((max, option) => Math.max(max, option.free), 0)
-    : null;
-  const notEnoughSpace = free !== null && up.total > free;
-  const anotherInstallActive = installerStatus?.is_installing && !up.installing && up.state !== 'uploading';
-
-  useEffect(() => {
-    const over = (event) => {
-      if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
-      event.preventDefault();
-      setDragging(true);
-    };
-    const leave = (event) => {
-      if (!event.relatedTarget) setDragging(false);
-    };
-    const drop = (event) => {
-      if (event.__pkgManagerDropHandled || !event.dataTransfer?.files?.length) return;
-      event.preventDefault();
-      event.__pkgManagerDropHandled = true;
-      setDragging(false);
-      if (canChoose) up.selectFile(event.dataTransfer.files[0]);
-    };
-    window.addEventListener('dragover', over);
-    window.addEventListener('dragleave', leave);
-    window.addEventListener('drop', drop);
-    return () => {
-      window.removeEventListener('dragover', over);
-      window.removeEventListener('dragleave', leave);
-      window.removeEventListener('drop', drop);
-    };
-  }, [canChoose, up.selectFile]);
-
-  const choose = (event) => {
-    const file = event.target.files?.[0];
-    if (file) up.selectFile(file);
-    event.target.value = '';
+export default function DirectInstallView({ queue, onBack, onOpenQueue }) {
+  const input = useRef(null);
+  const [reading, setReading] = useState(false);
+  const ownJob = (local) => [...queue.jobs].reverse().find((job) => job.file_key === local.id && job.source_id === queue.sourceId);
+  const ready = queue.files.filter((local) => canQueueBrowserFile(local, queue.jobs, queue.sourceId, queue.files));
+  const collect = async (selection, dropped) => {
+    setReading(true);
+    try {
+      const result = dropped ? await collectDroppedPkgFiles(selection) : { files: collectInputPkgFiles(selection), unreadable: [] };
+      await queue.addFiles(result.files, result.unreadable);
+    } finally { setReading(false); }
   };
-
   return (
-    <div className="max-w-2xl mx-auto bg-white/5 border border-white/10 rounded p-6 space-y-5">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold text-white">Direct Install</h2>
-        <button type="button" onClick={onBack}
-          className="px-3 py-1.5 rounded bg-white/10 hover:bg-white/15 border border-white/10 text-xs font-semibold text-zinc-200 cursor-pointer">
-          Back
-        </button>
+    <div className="max-w-6xl mx-auto space-y-5" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
+      event.preventDefault(); event.__pkgManagerDropHandled = true;
+      collect(event.dataTransfer, true);
+    }}>
+      <div className="flex items-center justify-between gap-3">
+        <button type="button" onClick={onBack} className="ps5-focus-item px-4 py-2 bg-white/10 rounded-[2px]">← Back</button>
+        <button type="button" onClick={onOpenQueue} className="ps5-focus-item px-4 py-2 bg-blue-600 rounded-[2px]">Open install queue</button>
       </div>
-
-      <p className="text-sm text-zinc-400">Choose a .pkg file on this computer. Review its details, then press Install to stream it to the console.</p>
-
-      <input ref={fileRef} type="file" accept=".pkg" className="hidden" onChange={choose} disabled={!canChoose} />
-      {canChoose && (
-        <div className={'border-2 border-dashed rounded p-10 text-center transition-colors ' +
-          (dragging ? 'border-[#0095ff] bg-[#0095ff]/10' : 'border-white/20 bg-black/10')}>
-          <p className="text-zinc-200 font-semibold">Drop a .pkg file anywhere on this page</p>
-          <p className="text-xs text-zinc-500 my-3">or</p>
-          <button type="button" onClick={() => fileRef.current?.click()}
-            className="px-5 py-2.5 rounded bg-[#0095ff] hover:bg-[#007fd6] text-white text-sm font-semibold cursor-pointer">
-            Browse files
-          </button>
+      <div className="border border-dashed border-white/20 bg-white/5 p-6 space-y-3 rounded-[2px]">
+        <h2 className="text-xl font-bold">Direct Install</h2>
+        <p className="text-sm text-zinc-300">Choose or drop PKG files. Keep this tab open while its queued packages stream to your PS5. You can browse the app during installation.</p>
+        <div className="flex flex-wrap gap-3">
+          <button type="button" onClick={() => input.current.click()} className="ps5-focus-item px-4 py-2 bg-white/10 rounded-[2px]">Choose packages</button>
+          <button type="button" disabled={!ready.length || !queue.connected} onClick={() => queue.enqueueFiles(ready.map((local) => local.id))} className="ps5-focus-item px-4 py-2 bg-blue-600 disabled:opacity-40 rounded-[2px]">Install all ({ready.length})</button>
         </div>
-      )}
-
-      {up.details && (
-        <div className="flex gap-4 p-4 rounded bg-white/5 border border-white/10">
-          <div className="w-20 h-20 shrink-0 rounded bg-black/30 border border-white/10 flex items-center justify-center overflow-hidden">
-            {up.iconUrl ? <img src={up.iconUrl} alt="Package icon" className="w-full h-full object-cover" /> :
-              <span className="text-zinc-500 text-xs">PKG</span>}
-          </div>
-          <div className="min-w-0 space-y-1">
-            <h3 className="text-white font-bold truncate">{up.details.title_name}</h3>
-            <p className="text-xs text-zinc-400 font-mono truncate">{up.details.title_id || up.details.content_id || up.fileName}</p>
-            <p className="text-xs text-zinc-400">{up.details.pkg_type} · {up.details.app_version || 'Version unknown'} · {formatBytes(up.total)}</p>
-            <p className="text-xs text-zinc-500 truncate">{up.fileName}</p>
-          </div>
-        </div>
-      )}
-
-      {up.eligibility?.can_install === false && (
-        <p className="text-sm text-amber-400">{up.eligibility.install_disabled_reason}</p>
-      )}
-      {notEnoughSpace && <p className="text-sm text-amber-400">Not enough storage space to install this package.</p>}
-      {anotherInstallActive && <p className="text-sm text-amber-400">Another package is currently installing.</p>}
-      {up.state === 'checking' && <p className="text-sm text-zinc-400">Checking package installation…</p>}
-      {up.state === 'selected' && up.eligibility?.can_install && (
-        <button type="button" onClick={up.upload} disabled={notEnoughSpace || anotherInstallActive}
-          className="w-full px-4 py-3 rounded bg-green-600 hover:bg-green-500 text-white font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
-          Install
-        </button>
-      )}
-
-      {(busy || up.state === 'complete') && (
-        <div className="space-y-2">
-          <div className="flex justify-between text-xs font-mono text-zinc-400">
-            <span>Sending package</span><span>{formatBytes(up.offset)} / {formatBytes(up.total)} ({pct}%)</span>
-          </div>
-          {debugEnabled && busy && (
-            <div className="flex justify-end text-xs font-mono text-cyan-300">
-              WebSocket receive: {formatBytes(up.uploadSpeed)}/s
-            </div>
-          )}
-          <div className="w-full h-2.5 bg-white/10 rounded overflow-hidden">
-            <div className="h-full bg-[#0095ff]" style={{ width: pct + '%' }} />
-          </div>
-          <p className="text-xs text-zinc-400">
-            {up.installing ? 'Installation started. Keep this browser open until it finishes.' :
-              busy ? 'Preparing package and waiting for the installer…' : 'Installation complete.'}
-          </p>
-        </div>
-      )}
-
-      {up.state === 'reading' && <p className="text-sm text-zinc-400">Reading package details…</p>}
-      {up.error && <p className="text-sm text-red-400">{up.error}</p>}
-      {up.state === 'error' && up.sessionId && up.details && (
-        <button type="button" onClick={up.upload}
-          className="px-4 py-2 rounded bg-[#0095ff] hover:bg-[#007fd6] text-white text-sm font-semibold cursor-pointer">
-          Resume installation
-        </button>
-      )}
-      {busy && <button type="button" onClick={up.cancel}
-        className="px-4 py-2 rounded bg-red-600 hover:bg-red-500 text-white text-sm font-semibold cursor-pointer">Cancel upload</button>}
-      {(up.state === 'error' || up.state === 'canceled' || up.state === 'complete') && (
-        <button type="button" onClick={async () => { if (up.sessionId) await up.cancel(); up.reset(); }}
-          className="px-4 py-2 rounded bg-white/10 hover:bg-white/15 border border-white/10 text-zinc-200 text-sm font-semibold cursor-pointer">Start over</button>
-      )}
+        <input ref={input} type="file" multiple accept=".pkg" className="hidden" onChange={(event) => { collect(event.target.files, false); event.target.value = ''; }} />
+        {reading && <p className="text-sm text-blue-300">Reading packages…</p>}
+      </div>
+      {queue.skipped.length > 0 && <p className="text-sm text-amber-300">{queue.skipped.length} unreadable file(s) skipped.</p>}
+      {queue.files.length > 0 && <div className="flex flex-wrap justify-between gap-2 text-xs text-zinc-400">
+        <span>{queue.files.length} package{queue.files.length === 1 ? '' : 's'} · {ready.length} ready to install</span>
+      </div>}
+      <div aria-label="Selected packages" className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        {queue.files.map((local) => {
+          const job = ownJob(local);
+          const pending = job && pendingStates.has(job.state);
+          const canCancel = pending && job.state !== 'canceling' && !job.is_direct_storage;
+          const canQueue = canQueueBrowserFile(local, queue.jobs, queue.sourceId);
+          const platform = getPlatform(local.details?.title_id);
+          const kind = local.details?.pkg_type;
+          const title = local.details?.title_name || local.file.name;
+          const problem = local.error || job?.error || (!pending && job?.state !== 'completed' && local.eligibility?.can_install === false ? local.eligibility.install_disabled_reason : '');
+          return (
+            <article key={local.id} className="min-w-0 flex flex-col p-2.5 bg-[#141520] border border-white/10 rounded-[2px]">
+              <div className="aspect-square-box rounded-[2px] overflow-hidden bg-black/50 border border-white/10">
+                <div className="aspect-square-content overflow-hidden">
+                  <PackageThumbnail src={local.iconUrl} title={title} />
+                  {platform && <span className={`absolute top-2 right-2 z-20 px-2 py-0.5 rounded-[2px] text-[10px] font-bold border pointer-events-none ${platform === 'PS5' ? 'bg-white text-black border-white' : 'bg-zinc-900 text-zinc-200 border-zinc-600'}`}>{platform}</span>}
+                  {kind && <span className={`absolute bottom-2 right-2 z-20 px-2 py-0.5 rounded-[2px] text-[10px] font-bold border uppercase pointer-events-none ${kind === 'update' ? 'bg-purple-600 text-white border-purple-400/60' : kind === 'dlc' ? 'bg-emerald-600 text-white border-emerald-400/60' : 'bg-blue-600 text-white border-blue-400/60'}`}>{kind}</span>}
+                </div>
+              </div>
+              <div className="flex-1 min-w-0 pt-3 pb-3 space-y-1.5">
+                <h3 className="text-sm font-semibold break-words">{title}</h3>
+                <p className="text-xs text-zinc-400 truncate" title={local.path || local.file.name}>{local.path || local.file.name}</p>
+                <p className="text-xs text-zinc-400">{[local.details?.title_id, formatVersion(local.details?.app_version), formatBytes(local.file.size)].filter(Boolean).join(' · ')}</p>
+                <p className={`text-xs ${problem ? 'text-amber-300' : job?.state === 'completed' ? 'text-emerald-300' : 'text-blue-300'}`}>{job ? queueStateLabel(job) : local.status === 'reading' ? 'Reading package…' : local.status === 'error' ? 'Unable to read package' : canQueue ? 'Ready' : 'Not installable'}</p>
+                {job?.state === 'installing' && <div role="progressbar" aria-label={`${title} installation progress`} aria-valuenow={Math.floor(Math.max(0, job.progress))} aria-valuemin={0} aria-valuemax={100} className="h-1 bg-white/10">
+                  <div className="h-full bg-blue-500" style={{ width: `${Math.min(100, Math.max(0, job.progress))}%` }} />
+                </div>}
+                {problem && <p className="text-xs text-amber-300 break-words">{problem}</p>}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" disabled={!queue.connected || (pending ? !canCancel : !canQueue)} onClick={() => pending ? queue.cancel(job) : queue.enqueueFiles([local.id])} className="ps5-focus-item flex-1 text-xs px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded-[2px]">{job?.state === 'completed' ? 'Installed' : pending ? ['queued', 'blocked'].includes(job.state) ? 'Unqueue' : 'Cancel install' : 'Install'}</button>
+                <button type="button" disabled={Boolean(pending)} onClick={() => queue.removeFile(local.id)} className="ps5-focus-item text-xs px-3 py-2 bg-white/10 hover:bg-white/20 disabled:opacity-40 rounded-[2px]">Cancel</button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
     </div>
   );
 }

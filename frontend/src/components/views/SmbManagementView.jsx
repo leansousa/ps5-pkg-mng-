@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import SmbFileBrowser from './SmbFileBrowser';
 
 
-export default function SmbManagementView({ settings, onBack, onAdd, onEdit, onToggle, onRemove, onTest, testing, onInstall }) {
+export default function SmbManagementView({ settings, onBack, onAdd, onEdit, onToggle, onRemove, onTest, testing, onInstall, installQueue }) {
   const [browsing, setBrowsing] = useState(null);
-  if (browsing) return <SmbFileBrowser share={browsing} onBack={() => setBrowsing(null)} onInstall={onInstall} />;
+  if (browsing) return <SmbFileBrowser share={browsing} onBack={() => setBrowsing(null)} onInstall={onInstall} installQueue={installQueue} />;
   const safeSettings = settings || {};
   const sharesList = Array.isArray(safeSettings.smb_shares) ? safeSettings.smb_shares : [];
   const totalShares = sharesList.length;

@@ -15,7 +15,7 @@ static int wait_for_state(int want_installing, int want_completed, int timeout_m
         installer_status_t st;
         installer_get_status(&st);
         if (!!st.is_installing == !!want_installing &&
-            (!want_completed || st.completed)) {
+            (!want_completed || st.completed || !strcmp(st.status_str, "submitted"))) {
             return 0;
         }
         usleep(100000);
@@ -160,6 +160,15 @@ int main(void) {
     installer_get_status(&st);
     assert(st.is_installing == 1); /* sparse 3GB stream still running */
     assert(installer_cancel() == 0);
+    assert(installer_start("/tmp/watchdog_big.pkg") == 0);
+    installer_notify_source_error("/tmp/another-session.pkg");
+    installer_get_status(&st);
+    assert(st.is_installing == 1);
+    installer_notify_source_error("/tmp/watchdog_big.pkg");
+    installer_get_status(&st);
+    assert(st.is_installing == 0 && st.failed == 1);
+    assert(st.error_code == -4);
+    assert(strstr(st.prompt_message, "Reconnect the drive/share") != NULL);
     installer_shutdown();
     system("rm -f /tmp/watchdog_big.pkg");
 
@@ -379,16 +388,16 @@ int main(void) {
     assert(wait_for_state(0, 1, 15000) == 0);
 
     installer_get_status(&st);
-    assert(st.completed == 1);
+    assert(st.completed == 0);
     assert(st.failed == 0);
     assert(st.is_direct_storage == 1);
-    assert(st.progress_percent == 100.0f);
-    assert(strcmp(st.status_str, "playable") == 0);
+    assert(st.progress_percent == -1.0f);
+    assert(strcmp(st.status_str, "submitted") == 0);
 
     log_txt = install_log_get_text(&log_sz);
     assert(strstr(log_txt, "Network not connected; using direct storage install") != NULL);
     assert(strstr(log_txt, "Cancel rejected: direct storage install cannot be canceled") != NULL);
-    assert(strstr(log_txt, "Direct filesystem install verified completed") != NULL);
+    assert(strstr(log_txt, "Submitted to PS5 system installer") != NULL);
     free(log_txt);
 
     char *offline_json = installer_status_to_json();
@@ -417,16 +426,16 @@ int main(void) {
     assert(wait_for_state(0, 1, 15000) == 0);
 
     installer_get_status(&st);
-    assert(st.completed == 1);
+    assert(st.completed == 0);
     assert(st.failed == 0);
     assert(st.is_direct_storage == 1);
-    assert(st.progress_percent == 100.0f);
-    assert(strcmp(st.status_str, "playable") == 0);
+    assert(st.progress_percent == -1.0f);
+    assert(strcmp(st.status_str, "submitted") == 0);
 
     log_txt = install_log_get_text(&log_sz);
     assert(strstr(log_txt, "0x80B21121") != NULL);
     assert(strstr(log_txt, "falling back to direct storage install") != NULL);
-    assert(strstr(log_txt, "Direct filesystem install verified completed") != NULL);
+    assert(strstr(log_txt, "Submitted to PS5 system installer") != NULL);
     free(log_txt);
 
     installer_shutdown();
@@ -460,12 +469,12 @@ int main(void) {
             usb_direct_update_seen = 1;
             assert(st.is_direct_storage == 1);
         }
-        if (usb_direct_update_seen && !st.is_installing && st.completed) break;
+        if (usb_direct_update_seen && !st.is_installing && !strcmp(st.status_str, "submitted")) break;
         usleep(100000);
         usb_direct_waited += 100;
     }
     assert(usb_direct_update_seen == 1);
-    assert(st.completed == 1);
+    assert(st.completed == 0);
     assert(st.failed == 0);
     assert(st.is_direct_storage == 1);
     assert(strcmp(st.pkg_path, "/tmp/test_usb_fixtures/wc_usb_upd.pkg") == 0);
@@ -491,7 +500,7 @@ int main(void) {
     assert(wait_for_state(0, 1, 15000) == 0);
 
     installer_get_status(&st);
-    assert(st.completed == 1);
+    assert(st.completed == 0);
     assert(st.failed == 0);
     assert(st.is_direct_storage == 1);
     assert(strcmp(st.pkg_path, "/tmp/test_usb_fixtures/wc_usb_upd.pkg") == 0);
@@ -561,6 +570,31 @@ int main(void) {
     unsetenv("PKG_USB_PREFIX");
     system("rm -rf /tmp/test_usb_seq");
     printf("Sequential USB stream installs passed!\n");
+
+    /* Test 13: Out-of-space error message translation (0x80B21104 / 0x80A30002) */
+    printf("Testing out-of-space error message translation (0x80B21104)...\n");
+    assert(strcmp(installer_strerror((int)0x80B21104u), "SCE_PLAYGO_ERROR_CORE_NO_FREE_SPACE") == 0);
+    assert(installer_is_nospace_error((int)0x80B21104u) == 1);
+    assert(installer_is_nospace_error((int)0x80A30002u) == 1);
+    assert(installer_is_nospace_error((int)0x80B21121u) == 0);
+
+    setenv("PKG_TEST_SIMULATE_0x80B21104", "1", 1);
+    res = installer_init("http://127.0.0.1:8085/");
+    assert(res == 0);
+    assert(fixture_write_ps5_pkg("/tmp/nospace.pkg", "PPSA90099", "NoSpaceGame", "gd", "01.000.000", 1) == 0);
+    assert(installer_start("/tmp/nospace.pkg") == 0);
+    assert(wait_for_state(0, 0, 15000) == 0);
+    installer_get_status(&st);
+    assert(st.failed == 1);
+    assert(st.completed == 0);
+    assert(st.error_code == (int)0x80B21104u);
+    assert(strstr(st.prompt_message, "Not enough free space for installation") != NULL);
+    assert(strstr(st.prompt_message, "0x80B21104") != NULL);
+
+    installer_shutdown();
+    unsetenv("PKG_TEST_SIMULATE_0x80B21104");
+    unlink("/tmp/nospace.pkg");
+    printf("Out-of-space error translation passed!\n");
 
     printf("\n>>> ALL INSTALLER TESTS PASSED! <<<\n");
     return 0;

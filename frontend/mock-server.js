@@ -1,4 +1,5 @@
 import http from 'http';
+import { createMockInstallQueue } from './mock-install-queue.js';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -397,6 +398,11 @@ const examplePkgs = [
     blurhash: ''
   }
 ];
+// Two add-ons for the first game make the bulk DLC control visible in the demo.
+const firstDlc = examplePkgs.find((pkg) => pkg.title_id === 'PPSA01001' && pkg.pkg_type === 'dlc');
+examplePkgs.push({ ...firstDlc, path: '/mnt/usb0/Astraea_Soundtrack.pkg', filename: 'Astraea_Soundtrack.pkg',
+  content_id: 'EP9000-PPSA01001_00-SOUNDTRACK000001', title_name: 'Astraea: Soundtrack' });
+
 
 // Set PKG_MOCK_COUNT to exercise the catalog UI with a large synthetic SMB
 // library (for example: PKG_MOCK_COUNT=3000 npm run mock). The default demo
@@ -515,6 +521,7 @@ const mockSettings = {
   move_installed_to_end: true,
   fade_installed_packages: true,
   all_sources_mode: true,
+  show_package_paths: false,
   smb_shares: [
     {
       id: 'smb_games',
@@ -593,6 +600,110 @@ let installInterval = null;
 const WS_MOCK_PORT = 18842;
 const mockUpload = { active: false, id: '', owner: '', filename: '', total: 0, received: 0, buf: null, icon: null };
 
+function stopMockInstall() {
+  if (installInterval) clearInterval(installInterval);
+  installerStatus.is_installing = false;
+  installerStatus.failed = true;
+  installerStatus.completed = false;
+  installerStatus.status = 'canceled';
+}
+
+function startMockInstall(pkg) {
+        const isMulti = !!pkg.is_multipart;
+        installerStatus = {
+          is_installing: true,
+          pkg_path: pkg.path,
+          title_id: pkg.title_id,
+          title_name: pkg.title_name,
+          content_id: pkg.content_id,
+          status: isMulti ? 'copying' : 'transferring',
+          downloaded_bytes: 0,
+          total_bytes: pkg.total_pkg_size || pkg.file_size,
+          progress: 0,
+          error_code: 0,
+          completed: false,
+          failed: false,
+          is_multipart: isMulti,
+          current_part: isMulti ? 1 : 0,
+          total_parts: isMulti ? (pkg.total_parts || 2) : 0,
+          waiting_for_disc: false,
+          prompt_message: isMulti ? `Copying Part 1 of ${pkg.total_parts || 2} from disc...` : 'Installing package...'
+        };
+
+        if (installInterval) clearInterval(installInterval);
+
+        if (isMulti) {
+          let step = 0;
+          installInterval = setInterval(() => {
+            if (!installerStatus.is_installing) {
+              clearInterval(installInterval);
+              return;
+            }
+            step++;
+            if (step <= 3) {
+              installerStatus.status = 'copying';
+              installerStatus.current_part = 1;
+              installerStatus.waiting_for_disc = false;
+              installerStatus.prompt_message = `Copying Part 1 of ${installerStatus.total_parts} from disc...`;
+              installerStatus.progress = step * 10;
+              installerStatus.downloaded_bytes = Math.floor((installerStatus.total_bytes / 3) * (step / 3));
+            } else if (step === 4) {
+              installerStatus.status = 'waiting_disc';
+              installerStatus.current_part = 2;
+              installerStatus.waiting_for_disc = true;
+              installerStatus.prompt_message = `Please insert Disc 2 of ${installerStatus.total_parts}`;
+            } else if (step <= 7) {
+              installerStatus.status = 'copying';
+              installerStatus.current_part = 2;
+              installerStatus.waiting_for_disc = false;
+              installerStatus.prompt_message = `Copying Part 2 of ${installerStatus.total_parts} from disc...`;
+              installerStatus.progress = 30 + (step - 4) * 10;
+              installerStatus.downloaded_bytes = Math.floor(installerStatus.total_bytes * (installerStatus.progress / 100));
+            } else if (step <= 9) {
+              installerStatus.status = 'transferring';
+              installerStatus.waiting_for_disc = false;
+              installerStatus.prompt_message = 'Finalizing package installation...';
+              installerStatus.progress = 70 + (step - 7) * 12;
+            } else {
+              installerStatus.progress = 100;
+              installerStatus.status = 'playable';
+              installerStatus.is_installing = false;
+              installerStatus.completed = true;
+              installerStatus.prompt_message = '';
+              clearInterval(installInterval);
+            }
+          }, 1000);
+        } else {
+          installInterval = setInterval(() => {
+            if (!installerStatus.is_installing) {
+              clearInterval(installInterval);
+              return;
+            }
+            installerStatus.downloaded_bytes += Math.floor(installerStatus.total_bytes / 10);
+            if (installerStatus.downloaded_bytes >= installerStatus.total_bytes) {
+              installerStatus.downloaded_bytes = installerStatus.total_bytes;
+              installerStatus.progress = 100;
+              installerStatus.status = 'playable';
+              installerStatus.is_installing = false;
+              installerStatus.completed = true;
+              clearInterval(installInterval);
+            } else {
+              installerStatus.progress = Math.round((installerStatus.downloaded_bytes / installerStatus.total_bytes) * 100);
+            }
+          }, 400);
+        }
+
+
+  if (process.env.PKG_MOCK_OFFLINE === '1' && !pkg.path.startsWith('live:')) {
+    clearInterval(installInterval);
+    Object.assign(installerStatus, { is_installing: false, completed: false, status: 'submitted',
+      is_direct_storage: true, progress: -1, prompt_message: 'Submitted to PS5' });
+  }
+}
+
+const mockQueue = createMockInstallQueue({ packages: examplePkgs, start: startMockInstall,
+  status: () => installerStatus, stop: stopMockInstall, upload: mockUpload });
+
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -610,6 +721,7 @@ const server = http.createServer(async (req, res) => {
 
   const parsedUrl = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const pathname = parsedUrl.pathname;
+  if (await mockQueue.handle(req, res, pathname)) return;
 
   console.log(`[Mock Server] ${req.method} ${pathname}`);
 
@@ -745,89 +857,7 @@ const server = http.createServer(async (req, res) => {
           return;
         }
 
-        const isMulti = !!pkg.is_multipart;
-        installerStatus = {
-          is_installing: true,
-          pkg_path: pkg.path,
-          title_id: pkg.title_id,
-          title_name: pkg.title_name,
-          content_id: pkg.content_id,
-          status: isMulti ? 'copying' : 'transferring',
-          downloaded_bytes: 0,
-          total_bytes: pkg.total_pkg_size || pkg.file_size,
-          progress: 0,
-          error_code: 0,
-          completed: false,
-          failed: false,
-          is_multipart: isMulti,
-          current_part: isMulti ? 1 : 0,
-          total_parts: isMulti ? (pkg.total_parts || 2) : 0,
-          waiting_for_disc: false,
-          prompt_message: isMulti ? `Copying Part 1 of ${pkg.total_parts || 2} from disc...` : 'Installing package...'
-        };
-
-        if (installInterval) clearInterval(installInterval);
-
-        if (isMulti) {
-          let step = 0;
-          installInterval = setInterval(() => {
-            if (!installerStatus.is_installing) {
-              clearInterval(installInterval);
-              return;
-            }
-            step++;
-            if (step <= 3) {
-              installerStatus.status = 'copying';
-              installerStatus.current_part = 1;
-              installerStatus.waiting_for_disc = false;
-              installerStatus.prompt_message = `Copying Part 1 of ${installerStatus.total_parts} from disc...`;
-              installerStatus.progress = step * 10;
-              installerStatus.downloaded_bytes = Math.floor((installerStatus.total_bytes / 3) * (step / 3));
-            } else if (step === 4) {
-              installerStatus.status = 'waiting_disc';
-              installerStatus.current_part = 2;
-              installerStatus.waiting_for_disc = true;
-              installerStatus.prompt_message = `Please insert Disc 2 of ${installerStatus.total_parts}`;
-            } else if (step <= 7) {
-              installerStatus.status = 'copying';
-              installerStatus.current_part = 2;
-              installerStatus.waiting_for_disc = false;
-              installerStatus.prompt_message = `Copying Part 2 of ${installerStatus.total_parts} from disc...`;
-              installerStatus.progress = 30 + (step - 4) * 10;
-              installerStatus.downloaded_bytes = Math.floor(installerStatus.total_bytes * (installerStatus.progress / 100));
-            } else if (step <= 9) {
-              installerStatus.status = 'transferring';
-              installerStatus.waiting_for_disc = false;
-              installerStatus.prompt_message = 'Finalizing package installation...';
-              installerStatus.progress = 70 + (step - 7) * 12;
-            } else {
-              installerStatus.progress = 100;
-              installerStatus.status = 'playable';
-              installerStatus.is_installing = false;
-              installerStatus.completed = true;
-              installerStatus.prompt_message = '';
-              clearInterval(installInterval);
-            }
-          }, 1000);
-        } else {
-          installInterval = setInterval(() => {
-            if (!installerStatus.is_installing) {
-              clearInterval(installInterval);
-              return;
-            }
-            installerStatus.downloaded_bytes += Math.floor(installerStatus.total_bytes / 10);
-            if (installerStatus.downloaded_bytes >= installerStatus.total_bytes) {
-              installerStatus.downloaded_bytes = installerStatus.total_bytes;
-              installerStatus.progress = 100;
-              installerStatus.status = 'playable';
-              installerStatus.is_installing = false;
-              installerStatus.completed = true;
-              clearInterval(installInterval);
-            } else {
-              installerStatus.progress = Math.round((installerStatus.downloaded_bytes / installerStatus.total_bytes) * 100);
-            }
-          }, 400);
-        }
+        startMockInstall(pkg);
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true, message: 'Installation started' }));
@@ -1098,6 +1128,11 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody();
       let parsed = {};
       try { parsed = JSON.parse(body || '{}'); } catch (e) {}
+      if (!mockQueue.selected(parsed.queue_id, parsed.owner)) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Upload job is not selected' }));
+        return;
+      }
       const total = Number(parsed.total) || 0;
       const filename = String(parsed.filename || '').split('/').pop();
       if (!filename || !(total > 0) || total > 2 * 1024 * 1024 * 1024) {
@@ -1118,6 +1153,7 @@ const server = http.createServer(async (req, res) => {
         mockUpload.total = total;
         mockUpload.received = 0;
         mockUpload.buf = Buffer.alloc(total);
+        mockUpload.present = null;
         mockUpload.icon = null;
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1309,6 +1345,8 @@ function mockWsUpgrade(req, sock) {
           mockUpload.icon = null;
           mockUpload.present = null;
           wsSendText(sock, { op: 'cancelled' });
+        } else if (msg.op === 'ping') {
+          wsSendText(sock, { op: 'pong' });
         } else if (msg.op === 'seg') {
           const S = Number(msg.seg);
           pendingSeg = Number.isInteger(S) && S >= 0 ? S : -1;
@@ -1316,7 +1354,7 @@ function mockWsUpgrade(req, sock) {
           wsSendText(sock, { op: 'error', error: 'unknown op' });
         }
       } else if (opcode === 0x2 || (opcode === 0x0 && fragOp === 2)) {
-        if (opcode === 0x2) { fragOp = 2; pendingSeg = -1; fragBin = []; }
+        if (opcode === 0x2) { fragOp = 2; fragBin = []; }
         if (!mockUpload.active || !mockUpload.buf) { wsSendText(sock, { op: 'error', error: 'no session' }); continue; }
         fragBin.push(pay);
         if (!fin) continue;
@@ -1353,6 +1391,6 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(` Dashboard URL : http://localhost:${PORT}`);
   console.log(` LAN Access    : http://0.0.0.0:${PORT}`);
   console.log(` Sources       : USB Drive 0, Blu-ray Disc, 2 Samba shares`);
-  console.log(` Packages      : 14 packages (Fictional titles, clean art)`);
+  console.log(` Packages      : ${examplePkgs.length} packages (Fictional titles, clean art)`);
   console.log(`=======================================================`);
 });
